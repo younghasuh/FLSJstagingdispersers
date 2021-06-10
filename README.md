@@ -4,3 +4,4 @@ This repository contains statistical code and data related to the manuscript tit
 
 Files:
 - `subordinatedispersal.xlsx`  contains data extracted from the long-term Access database collected and managed by the Avian Ecology Lab at [Archbold Biological Station](https://www.archbold-station.org/).  
+-`survival.xlsx` contains values for calculating survival and probability of becoming a breeder, based on figure 1. 
