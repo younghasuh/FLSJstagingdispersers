@@ -9,7 +9,6 @@ Authors: Young Ha Suh<sup>1,2</sup>, Reed Bowman<sup>3</sup>, and John W. Fitzpa
 3. Avian Ecology Program, Archbold Biological Station, Venus, FL 33960.
 
 Correspondence: **Young Ha Suh**
-
 215 Tower Rd, Corson-Mudd Hall, Cornell University, Ithaca, NY 1485
 ys757@cornell.edu
 
