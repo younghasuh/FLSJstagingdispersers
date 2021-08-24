@@ -1,6 +1,6 @@
 # Manuscript data and code repository
 
-This repository contains statistical code and data related to the manuscript titled "Staging to join non-kin groups in a classical cooperative breeder, the Florida scrub-jay" submitted to the Journal of Animal Ecology. The goal is to increase transparency and reproducibility in research.
+This repository contains statistical code and data related to the manuscript titled "Staging to join non-kin groups in a classical cooperative breeder, the Florida scrub-jay" submitted to the [Journal of Animal Ecology](https://besjournals.onlinelibrary.wiley.com/journal/13652656). The goal is to increase transparency and reproducibility in research.
 
 Authors: Young Ha Suh<sup>1,2</sup>, Reed Bowman<sup>3</sup>, and John W. Fitzpatrick<sup>1,2</sup>
 
