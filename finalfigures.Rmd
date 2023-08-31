@@ -1,0 +1,290 @@
+---
+title: "Final figures"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+setwd("C:/Users/young/OneDrive/Documents/MS transience/1-Revision/figures")
+
+mytheme_fin <-  theme(
+        axis.text=element_text(size=12, color="black"),
+        axis.title=element_text(size=14,face="bold",color="black"),
+        legend.text = element_text(size=12, color="black"),
+        legend.title = element_text(size=14, color="black", face="bold"))
+```
+
+
+
+```{r Figure 2}
+age <- ggplot(firstleave, aes(x=Sex, y=datdiff, fill=path)) +
+  stat_boxplot(aes(x=Sex, y=datdiff, fill=path), geom="errorbar", position = position_dodge(width=.75), width=.5) +
+  geom_boxplot(aes(fill=path),col="black", outlier.color = "black", outlier.size=1, position=position_dodge(width=.75), fatten=3) +
+  theme_classic()+ 
+  stat_compare_means(method = "wilcox.test", label="p.signif", size=7, symnum.args=m) +
+  mytheme_fin +
+  labs(fill="Dispersal strategy", y = "Age at dispersal (in days)") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Staging"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+age
+
+dist <- ggplot(ds, aes(x=Sex, y=FinalDistance, fill=path)) +
+  stat_boxplot(aes(x=Sex, y=FinalDistance, fill=path), geom="errorbar", position = position_dodge(width=.75), width=.5) +
+  geom_boxplot(aes(fill=path), col="black", outlier.color = "black", outlier.size=1, position=position_dodge(width=.75), fatten=3) +
+  theme_classic()+ 
+  stat_compare_means(method = "wilcox.test", label="p.signif", size=7, symnum.args=m) +
+  mytheme_fin +
+  labs(fill="Dispersal pathway", y = "Dispersal distance (m)") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Staging"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female")) +
+  ylim(0, 4500)
+dist
+
+pg <- plot_grid(
+  age + theme(legend.position="none"),
+  dist + theme(legend.position="none"),
+  align = 'vh',
+  labels = c("A", "B"),
+  hjust = -1,
+  nrow = 1, label_size = 16
+)
+
+disp_lg <- get_legend(age + theme(legend.box.margin = margin(0,0,0,12)))
+
+plot_grid(pg, disp_lg, rel_widths = c(3, 0.8))
+
+ggsave("Figure_2.pdf", plot=last_plot(), width=250, height=130, units="mm", dpi=600, scale=T)
+ggsave("Figure_2.png", plot=last_plot(), width=250, height=130, units="mm", dpi=600, scale=T)
+
+```
+
+
+```{r Figure 3}
+size <- 0.8
+
+cs <- ggplot(compscrub, aes(x = Sex, y = values, fill = terratt)) +
+  stat_boxplot(aes(x = Sex, y=values, fill=terratt), geom="errorbar", position = position_dodge(width=.75), width=.5, size=size) +
+  geom_boxplot(aes(fill=terratt), col="black", outlier.color = "black", outlier.size=1, position=position_dodge(width=.75), fatten=2, size=size) +
+  theme_classic()+ 
+  stat_compare_means(method = "t.test", label="p.signif", size=7, symnum.args=m) +
+  mytheme_fin +
+  labs(fill="Territory", y = "Area of scrub habitat \n (in cell count)") +
+  scale_fill_manual(values=pal20, labels=c("Natal", "Non-natal"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+cs 
+
+# fire
+cf <- ggplot(compfire, aes(x = Sex, y = values, fill = terratt)) +
+  stat_boxplot(aes(x = Sex, y=values, fill=terratt), geom="errorbar", position = position_dodge(width=.75), width=.5, size=size) +
+  geom_boxplot(aes(fill=terratt), col="black", outlier.color = "black", outlier.size=1, position=position_dodge(width=.75), fatten=2, size=size) +
+  theme_classic()+ 
+  stat_compare_means(method = "t.test", label="p.signif", size=7, symnum.args=m) +
+  mytheme_fin +
+  labs(fill="Territory", y = "Area of recently burned scrub \n (in cell count) ") +
+  scale_fill_manual(values=pal20, labels=c("Natal", "Non-natal"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+# same-sex
+ch <- ggplot(comphelp2, aes(x = Sex, y = values, fill = terratt2)) +
+  stat_boxplot(aes(x = Sex, y=values, fill=terratt2), geom="errorbar", position = position_dodge(width=.75), width=.5, size=size) +
+  geom_boxplot(aes(fill=terratt2), col="black", outlier.color = "black", outlier.size=1, position=position_dodge(width=.75), fatten=2, size=size) +
+  theme_classic()+ 
+  stat_compare_means(method = "t.test", label="p.signif", size=7, symnum.args=m) +
+  mytheme_fin +
+  labs(fill="Territory", y = "Number of same-sex helpers") +
+  scale_fill_manual(values=pal20, labels=c("Natal", "Non-natal"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+
+# Plot all together
+prow <- plot_grid(
+  cs + theme(legend.position="none"),
+  cf + theme(legend.position="none"),
+  ch + theme(legend.position="none"),
+  align = 'vh',
+  labels = c("A", "B", "C"),
+  hjust = -1,
+  nrow = 1, label_size = 16
+)
+
+leg <- get_legend(cs + theme(legend.box.margin = margin(0,0,0,12)))
+
+plot_grid(prow, leg, rel_widths = c(3, .4))
+
+ggsave("Figure_3.pdf", plot=last_plot(), width=375, height=125, units="mm", dpi=600, scale=T)
+ggsave("Figure_3.png", plot=last_plot(), width=375, height=125, units="mm", dpi=600, scale=T)
+
+```
+
+
+
+```{r Figure 4}
+survival_m <- ggsurvplot(fit.sm, data = survm, pval = F, 
+           position = position_dodge(width=.3), 
+           palette = pal2,
+           font.y = c(14, "bold", "black"),
+           font.x = c(14, "bold", "black"),
+           font.tickslab = c(12, "plain", "black"),
+           size = 2, 
+           conf.int = T,
+           censor = F,
+           legend = c(0.4, 0.3),
+           legend.title = "Dispersal strategy", 
+           legend.labs = c("Direct", "Staging"),
+           break.x.by = 1,
+           xlim = c(1,8),
+           ylim = c(0.3,1)) +
+  labs(x="Age in years", y="Apparent survivorship") 
+survival_m$plot <- survival_m$plot + 
+  theme(legend.text = element_text(size = 12, color = "black", face = "plain"), 
+        legend.title = element_text(size = 14, color = "black", face = "bold"))
+
+# Females
+fit.sf <- survfit(Surv(recn, last) ~ home, data = survf)
+survival_f <- ggsurvplot(fit.sf, data = survf, pval = F, 
+           position = position_dodge(width=.3), 
+           palette = pal2,
+           font.y = c(14, "bold", "black"),
+           font.x = c(14, "bold", "black"),
+           font.tickslab = c(12, "plain", "black"),
+           size = 2, 
+           conf.int = T,
+           censor = F,
+           legend = c(0.75, 0.2),
+           legend.title = "Dispersal strategy", 
+           legend.labs = c("Direct", "Staging"),
+           break.x.by = 1,
+           xlim = c(1,6),
+           ylim = c(0.3,1)) +
+  labs(x="Age in years", y="Apparent survivorship") 
+survival_f$plot <- survival_f$plot + 
+  theme(legend.text = element_text(size = 12, color = "black", face = "plain"), 
+        legend.title = element_text(size = 14, color = "black", face = "bold"))
+survival_f
+
+# Plot together
+survival_grid <- plot_grid(
+  survival_m$plot,
+  survival_f$plot + theme(legend.position="none"),
+  align = 'vh',
+  labels = c("A", "B"),
+  hjust = -1,
+  nrow = 1, label_size = 16)
+
+survival_grid
+
+ggsave("Figure_4.png", plot=survival_grid, width=250, height=130, units="mm", dpi=600, scale=T)
+
+```
+
+
+```{r Figure 5}
+breeding_m <- ggsurvplot(fit.sm0, data = sm, pval = F, 
+           position = position_dodge(width=.3), 
+           palette = pal2,
+           font.y = c(14, "bold", "black"),
+           font.x = c(14, "bold", "black"),
+           font.tickslab = c(12, "plain", "black"),
+           size = 2, 
+           conf.int = T,
+           censor = F,
+           legend = c(0.2, 0.8),
+           legend.title = "", 
+           fun = "event", 
+           legend.labs = c("Direct", "Staging"),
+           break.x.by = 1,
+           xlim = c(1,7),
+           ylim = c(0, 0.3)) +
+  labs(x="Age in years", y="Probability of having become breeder") 
+breeding_m$plot <- breeding_m$plot + 
+  theme(legend.text = element_text(size = 12, color = "black", face = "plain"), 
+        legend.title = element_text(size = 14, color = "black", face = "bold"))
+breeding_m
+
+breeding_f <- ggsurvplot(fit.sf0, data = sf, pval = F, 
+           position = position_dodge(width=.3), 
+           palette = pal2,
+           font.y = c(14, "bold", "black"),
+           font.x = c(14, "bold", "black"),
+           font.tickslab = c(12, "plain", "black"),
+           size = 2, 
+           conf.int = T,
+           fun = "event", 
+           censor = F,
+           legend = c(0.3, 0.3),
+           legend.title = "", 
+           legend.labs = c("Direct", "Staging"),
+           break.x.by = 1,
+           xlim = c(1,6),ylim = c(0, 0.3)) +
+  labs(x="Age in years", y="Probability of having become breeder") 
+breeding_f$plot <- breeding_f$plot + 
+  theme(legend.text = element_text(size = 20, color = "black", face = "plain"), 
+        legend.title = element_text(size = 22, color = "black", face = "bold"))
+breeding_f
+
+breeding_grid <- plot_grid(
+  breeding_m$plot,
+  breeding_f$plot + theme(legend.position="none"),
+  align = 'vh',
+  labels = c("A", "B"),
+  hjust = -1,
+  nrow = 1, label_size = 16)
+
+breeding_grid
+
+ggsave("Figure_5.png", plot=breeding_grid, width=250, height=130, units="mm", dpi=600, scale=T)
+
+```
+
+
+```{r Figure 6}
+FLG2 <- ggplot(fitness, aes(x=Sex, y=sum_fledge, fill=path)) +
+  geom_violin(aes(fill=path), size=0.75, col="black", position=position_dodge(width=.75)) +
+  geom_boxplot(aes(fill=path), col="black", width=0.1, fatten=3, position=position_dodge(width=.75), outlier.shape = NA) + 
+  theme_classic()+ 
+  stat_compare_means(method = "wilcox.test", label="p.signif", size=7, symnum.args=m, label.y=34) +
+  mytheme_fin +
+  theme(legend.position = "none")+
+  labs(fill="Dispersal pathway", y = "Lifetime fledgling production") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Staging"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+BSA2 <- ggplot(fitness2010, aes(x=Sex, y=breedingseasons, fill=path)) +
+  geom_violin(aes(fill=path), size=0.75, col="black", position=position_dodge(width=.75)) +
+  geom_boxplot(aes(fill=path), col="black", width=0.1, fatten=3, position=position_dodge(width=.75), outlier.shape = NA) + 
+  theme_classic()+ 
+  stat_compare_means(method = "wilcox.test", label="p.signif", size=7, symnum.args=m, label.y=13.5) +
+  mytheme_fin +
+  theme(legend.position = "none")+
+  labs(fill="Dispersal pathway", y = "Number of breeding seasons") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Staging"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+AFB2 <- ggplot(afb, aes(x=sex, y=age, fill=path)) +
+  geom_violin(aes(fill=path),size=0.75, col="black", position=position_dodge(width=.75)) +
+  geom_boxplot(aes(fill=path), col="black", width=0.1, fatten=3, position=position_dodge(width=.75), outlier.shape = NA) + 
+  theme_classic()+ 
+  stat_compare_means(method = "wilcox.test", label="p.signif", size=7, symnum.args=m) +
+  mytheme_fin +
+  labs(fill="Dispersal strategy", y = "Age at first breeding (in years)") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Staging"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+prow_repro <- plot_grid(
+  AFB2 + theme(legend.position="none"),
+  BSA2 + theme(legend.position="none"),
+  FLG2 + theme(legend.position="none"),
+  align = 'vh',
+  labels = c("A", "B", "C"),
+  hjust = -1,
+  nrow = 1, label_size = 16
+)
+
+leg_repro <- get_legend(AFB2 + theme(legend.box.margin = margin(0,0,0,12)))
+
+rep <- plot_grid(prow_repro, disp_lg, rel_widths = c(3, .45))
+
+ggsave("Figure_6.pdf", plot=rep, width=375, height=125, units="mm", dpi=600, scale=T)
+ggsave("Figure_6.png", plot=rep, width=375, height=125, units="mm", dpi=600, scale=T)
+```
+
