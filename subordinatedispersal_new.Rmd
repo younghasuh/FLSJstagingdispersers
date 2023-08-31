@@ -1,0 +1,2033 @@
+---
+title: "Final analysis for submission"
+output: html_document
+date: "1/22/2021"
+editor_options: 
+  chunk_output_type: console
+---
+
+setwd("C:/Users/young/OneDrive/Documents/MS transience/TransientStage")
+
+# Libraries 
+```{r Libraries}
+library(readxl)
+library(lme4)
+library(lubridate)
+library(Rmisc)
+library(car)
+library(survival)
+library(survminer)
+library(tidyverse)
+library(glmmTMB)
+library(TeachingDemos)
+library(ggpubr)
+library(patchwork)
+library(cowplot)
+```
+
+# Color palettes
+```{r Themes}
+pal2 <- c("#08819d", "#ffa200")
+pal3 <- c("#ffa200", "#08819d") #switch pal2 
+bw <- c("#505050","#999999")
+
+pal20 <- c("#ffa200", "#b27100")
+pal21 <- c("#ffa200", "#ffbd4c")
+
+mytheme <-  theme(
+        axis.text=element_text(size=20, color="black"),
+        axis.title=element_text(size=22,face="bold",color="black"),
+        axis.text.x=element_text(size=20, color="black"), 
+        axis.text.y=element_text(size=20, color="black"),
+        legend.text = element_text(size=20, color="black"),
+        legend.title = element_text(size=22, color="black", face="bold"))
+```
+
+# Import and clean data
+Scrapped the editing that Lynn did; do that when I get to the survival analysis part because there are gaps to fill. 
+
+## Import
+Main `subordinatedispersal.xlsx` and census `census.xlsx`
+```{r Data import}
+#setwd("C:/Users/young/OneDrive/Documents/MS transience/TransientStage")
+dat <- read_excel("subordinatedispersal.xlsx", sheet="Data") # 2312
+
+cen <- read_excel("census.xlsx") #n=521
+cen$CensusDate <- as.Date(cen$CensusDate, origin = "1899-12-30")
+cen$cenYM <- format(cen$CensusDate,"%Y-%m") # have a year-month format
+cen_short <- cen %>% select(CensusDate, CensusN, month, cenYM) %>% as.data.frame()
+cens <- cen %>% select(CensusDate, cenYM) %>% as.data.frame()
+cs <- cen_short %>% select(CensusDate, CensusN)
+```
+
+## Clean
+```{r Tidy and clean data}
+# convert POSIXct to Date format
+dat$ArrTerrCensus <- as.Date(dat$ArrTerrCensus, origin = "1899-12-30")
+dat$LveTerr <- as.Date(dat$LveTerr, origin = "1899-12-30")
+dat$EventDate <- as.Date(dat$EventDate, origin = "1899-12-30")
+
+# add path
+dat$path <- ifelse(dat$Nterrbtwn == 0, "direct", "subordinate")
+
+table(dat$path)
+#     direct subordinate 
+#       1500         812 
+
+n_distinct(dat$USFWBand[dat$path == "subordinate"]) # n = 280
+
+n_distinct(dat$USFWBand) # n = 1408
+
+# Add counter for each record
+dat <- dat %>%
+  arrange(USFWBand, ArrTerrCensus) %>%
+  group_by(USFWBand) %>%
+  dplyr::mutate(records = n(), recNum = 1:n()) %>%
+  dplyr::mutate(LastObs = ifelse(records == recNum, 1, 0))
+
+dat <- as.data.frame(dat)
+
+# Need to sort out birds where their EventDate (if BecameBreeder == Yes) don't match their ArrTerrCensus 
+# Go with EventDate that is closest to the census (pick smallest datediff from census?)
+#View(dat[which(dat$Type == "Breeding" & dat$ArrTerrCensus > dat$EventDate),]) 
+
+#dat2 <- dat %>% 
+#  arrange(USFWBand, ArrTerrCensus) %>%
+#  mutate(ArrCensus = ifelse(Type == "Breeding" & EventDate < ArrTerrCensus, EventDate, ArrTerrCensus),
+#         ArrCensus = as.Date(ArrCensus, origin = "1970-01-01"), # note different origin for dplyr
+#         ArrCensusYM = format(ArrCensus, "%Y-%m")) %>%  
+#  select(USFWBand, JayID, Sex, NatalNest, AtTerr, ArrTerrCensus, ArrCensus, ArrCensusYM, LveTerr, Type, Soc, EventDate, BecameBreeder) 
+  
+#View(dat2[which(dat2$USFWBand == "1603-17424"),]) #works 
+#View(dat2[which(dat2$Type == "Breeding" & dat2$ArrCensus > dat2$EventDate),]) # zero 
+
+# don't select set columns, it was just for easy viewing above
+dat2 <- dat %>% 
+  arrange(USFWBand, ArrTerrCensus) %>%
+  mutate(ArrCensus = ifelse(Type == "Breeding" & EventDate < ArrTerrCensus, EventDate, ArrTerrCensus),
+         ArrCensus = as.Date(ArrCensus, origin = "1970-01-01"),
+         ArrCensusYM = format(ArrCensus, "%Y-%m"))
+
+# Need to match the census dates
+# Now need to match the leave dates
+# make sure to see if this is reflected in new3
+dat3 <- dat2 %>% 
+  left_join(cens, by = c("ArrCensusYM" = "cenYM")) %>%  
+  mutate(ArrCensusNew = CensusDate) %>% 
+  left_join(cs, c("ArrCensusNew" = "CensusDate")) %>% 
+  left_join(cs, c("LveTerr" = "CensusDate"), suffix = c("_arr", "_lve")) %>% 
+  select(-CensusDate) %>% 
+  group_by(USFWBand) %>% 
+  mutate(CensusN_lve2 = ifelse(lead(Type == "Breeding" & ArrTerrCensus != ArrCensusNew), lead(CensusN_arr)-1, CensusN_lve), 
+         CensusN_lve2 = ifelse(is.na(CensusN_lve2), CensusN_lve, CensusN_lve2)) %>% # to fill in NAs generated from above
+  left_join(cs, c("CensusN_lve2" = "CensusN")) %>% # join back to get date
+  mutate(LveCensusNew = CensusDate) %>% 
+  select(-CensusDate) %>% 
+  as.data.frame()
+
+# for each group, see the gap between lead(censusN_arr) and CensusN_lve2
+# Check for abnormally large gaps or negative values
+# Esepcially if gap > 150, includes breeding season, and the next social=breeding, remove those
+
+# test <- dat3 %>% 
+#   select(USFWBand, Sex, NatalNest, Type, AtTerr, ArrCensusNew, LveCensusNew) %>% 
+#   group_by(USFWBand) %>% 
+#   mutate(duration = LveCensusNew - ArrCensusNew,
+#          diff = lead(ArrCensusNew) - LveCensusNew,
+#          diffdays = as.numeric(diff, units="days"))
+# test$err <- ifelse(test$diffdays > 45, "odd", "probsfine")
+# 
+# test %>% 
+#   group_by(USFWBand) %>% 
+#   filter(lead(Type) == "Breeding" & diffdays > 40 | diffdays < 0) %>% 
+#   mutate(LveMonth = format(LveCensusNew, "%m"),
+#          lvem = as.numeric(LveMonth)) %>% 
+#   filter(2 %<% lvem %<% 7) %>% 
+#   View()  # -> 2 birds that fit this category but they leave in June, see note below 
+```
+
+Removed 8 birds: 1453-78305, 1063-43189, 1453-39097, 1453-63509, 1453-63525, 1453-78182, 1453-78287, 1053-56566 because they were gone during breeding census but returned as breeder [in the "Removed" tab of the `subordinatedispersal.xlsx`]
+
+There are 2 birds (1513-50325 and 1713-13494) that disperse to become breeders in June. Kept because there are only 6 nests ever found in June (also just in the first week of June, so by the time census happens in mid-June, it is unlikely), only one was a first nest for a group. 
+
+=> using `ArrCensusNew` / `CensusN_arr` and `LveCensusNew`/ `CensusN_lve2` downstream
+
+
+
+## How long were they bouncing around for?
+for (soc=breeder ArrTerr) - (soc=offspring lveterr); group by ID
+
+This may depend on whether the bird becomes a breeder or dies as a transient 
+
+Not sure how informative this is?
+```{r Duration of transience}
+# Look at just the subordinates
+dur <- dat3 %>% 
+  select(USFWBand, Sex, NatalNest, path, Type, AtTerr, ArrCensusNew, LveCensusNew, BecameBreeder) %>% 
+  filter(path == "subordinate") %>% 
+  arrange(USFWBand, ArrCensusNew) %>%
+  group_by(USFWBand) %>% 
+  slice(c(1,n())) %>%  # get first and last row of a group
+  mutate(duration = lead(ArrCensusNew) - LveCensusNew) %>% 
+  slice(1) # get the first row 
+
+summarySE(dur, measurevar = "duration", groupvars = "Sex")
+#  Sex   N duration       sd       se       ci
+#1   F 137 203.0292 200.7161 17.14833 33.91187
+#2   M 137 270.7226 393.6740 33.63384 66.51296
+
+summarySE(dur, measurevar = "duration", groupvars = c("Sex", "BecameBreeder"))
+#  Sex BecameBreeder  N  duration        sd       se       ci
+#1   F            No 55  77.27273  96.24668 12.97790 26.01912
+#2   F           Yes 82 287.37805 208.62824 23.03914 45.84065
+#3   M            No 42  53.64286 259.66562 40.06728 80.91750
+#4   M           Yes 95 366.69474 405.52687 41.60618 82.61004
+```
+
+
+
+Extract just a list of USFWBands and Sex
+```{r List of birds & sex}
+sex <- dat3 %>% 
+  select(USFWBand, Sex, BecameBreeder) %>% 
+  group_by(USFWBand)%>% 
+  summarise(min(Sex), min(BecameBreeder)) %>% 
+  mutate(sex=`min(Sex)`,
+         BecameBreeder=`min(BecameBreeder)`) %>% 
+  select(USFWBand, sex, BecameBreeder)
+
+table(sex$sex) #M=709, F=692
+```
+
+## Check if numbers add up
+```{r QAQC}
+#Pull out last observation for each bird
+ds <- dat3 %>%
+  arrange(USFWBand, ArrTerrCensus) %>%
+  group_by(USFWBand) %>%
+  slice(c(n()))
+ds <- as.data.frame(ds)
+
+
+table(dat$Type) # breeder n = 547
+table(ds$Type) # breeder n = 547 matches
+
+table(ds$Nterrbtwn)
+table(ds$Nterrbtwn, ds$Sex)
+
+summarySE(ds, measurevar = "Nterrbtwn", groupvars = c("Sex", "path"))
+#  Sex        path   N Nterrbtwn        sd         se        ci
+#2   F subordinate 137  1.357664 0.6270522 0.05357269 0.1059432
+#4   M subordinate 137  1.401460 0.9272021 0.07921622 0.1566549
+summarySE(ds, measurevar = "Nterrbtwn", groupvars = "path")
+#        path    N Nterrbtwn       sd         se         ci
+#      direct 1127  0.000000 0.000000 0.00000000 0.00000000
+# subordinate  274  1.379562 0.790339 0.04774612 0.09399739
+
+
+table(ds$path, ds$Sex)
+
+#               F   M
+#  direct     555 572
+#  transients 137 137 
+
+# Split by sex
+dsm <- ds[which(ds$Sex == "M"),]
+dsf <- ds[which(ds$Sex == "F"),]
+
+# make sure numbers add up
+table(ds$BecameBreeder, ds$path)
+#      direct subordinate
+#  No     757          97
+#  Yes    370         177  -> adds to 547
+
+table(ds$Sex, ds$BecameBreeder, ds$path)
+#, ,  = direct
+#     No Yes
+#  F 428 127
+#  M 329 243
+
+#, ,  = subordinate
+#     No Yes
+#  F  55  82
+#  M  42  95
+
+n_distinct(ds$USFWBand[ds$BecameBreeder == "Yes"]) #n=547
+n_distinct(dat$USFWBand[dat$BecameBreeder == "Yes"]) #n=547
+n_distinct(dat$USFWBand[dat$Type == "Breeding"]) #n=547
+```
+
+
+< br>
+
+# Compare dispersal path outcomes
+
+## Age at dispersal
+
+Do I need to re-do this? Because I want to maybe include birds that only have one record but did a subordinate dispersal
+=> filter out birds that die at home
+
+Before: n = 1534 -> [added or path in filter] After: n = 1534 same 
+
+```{r Dispersal path - age}
+# remove birds that die on natal territory (those with only one record)
+livemore <- dat3 %>% 
+            group_by(USFWBand) %>% 
+            filter(n()>1 | path == "subordinate")
+
+livemore <- as.data.frame(livemore) #n=1534
+n_distinct(livemore$USFWBand) #n=644
+
+# get the first move (moving out of natal territory)
+firstleave <- livemore[which(livemore$recNum == 1),] #n=644
+
+
+# Obtain date difference (duration)
+firstleave$datdiff <- (firstleave$LveTerr - firstleave$ArrCensusNew)
+firstleave$datdiff <- as.numeric(firstleave$datdiff) #by days
+
+summarySE(firstleave, measurevar="datdiff", groupvars=c("Sex", "path"), na.rm=T)
+#  Sex        path   N  datdiff       sd       se       ci
+#1   F      direct 127 726.1969 257.2608 22.82820 45.17634
+#2   F subordinate 137 457.4380 258.4640 22.08207 43.66863
+#3   M      direct 244 718.4631 302.9454 19.39409 38.20199
+#4   M subordinate 136 471.2353 229.5035 19.67976 38.92051
+
+#-> 264 females 380 males
+
+# split by sex
+flm <- firstleave[which(firstleave$Sex == "M"),]
+flf <- firstleave[which(firstleave$Sex == "F"),]
+
+t.test(datdiff~path, data=firstleave) #t = 12.221, df = 629.12, p-value < 2.2e-16
+t.test(datdiff~path, data=flm) #t = 8.9478, df = 344.19, p-value < 2.2e-16
+t.test(datdiff~path, data=flf) #t = 8.462, df = 260.67, p-value = 1.917e-15
+
+wilcox.test(datdiff~path, data=flm) # W = 25292, p-value < 2.2e-16
+wilcox.test(datdiff~path, data=flf) # W = 13356, p-value = 5.812e-14
+
+ggqqplot(flm$datdiff)
+ggqqplot(flf$datdiff)
+shapiro.test(flm$datdiff) # not normal
+shapiro.test(flf$datdiff) # not normal
+
+# plot
+ggplot(firstleave, aes(x=Sex, y=datdiff, fill=path)) +
+  stat_boxplot(aes(x=Sex, y=datdiff, fill=path), geom="errorbar", position = position_dodge(width=.75), width=.5) +
+  geom_boxplot(aes(fill=path), outlier.size=1.5, position=position_dodge(width=.75)) +
+  theme_classic()+ 
+  theme(axis.text=element_text(size=14, color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        axis.text.x=element_text(size=14, color="black"), 
+        axis.text.y=element_text(size=14, color="black"),
+        legend.text = element_text(size=14, color="black"),
+        legend.title = element_text(size=14, color="black", face="bold"))+
+  labs(fill="Dispersal pathway", y = "Age at dispersal (in days)") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Subordinate"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+ggsave("dispersal_age_colored.tiff", plot = ggplot2::last_plot(), width=177, height=130, units="mm", dpi=300)
+
+## With stats comparison
+m <- list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), symbols = c("***","**", "*", "ns"))
+
+age <- ggplot(firstleave, aes(x=Sex, y=datdiff, fill=path)) +
+  stat_boxplot(aes(x=Sex, y=datdiff, fill=path), geom="errorbar", position = position_dodge(width=.75), width=.5) +
+  geom_boxplot(aes(fill=path), outlier.size=1.5, position=position_dodge(width=.75), fatten=4) +
+  theme_classic()+ 
+  stat_compare_means(method = "wilcox.test", label="p.signif", size=10, symnum.args=m) +
+  theme(axis.text=element_text(size=16, color="black"),
+        axis.title=element_text(size=18,face="bold",color="black"),
+        axis.text.x=element_text(size=16, color="black"), 
+        axis.text.y=element_text(size=16, color="black"),
+        legend.text = element_text(size=16, color="black"),
+        legend.title = element_text(size=16, color="black", face="bold"))+
+  labs(fill="Dispersal strategy", y = "Age at dispersal (in days)") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Staging"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+age
+ggsave("dispersal_age_colored._stats.tiff", plot = ggplot2::last_plot(), width=177, height=130, units="mm", dpi=300)
+
+
+```
+
+## Distances
+```{r Dispersal path - distance}
+t.test(FinalDistance~path, data=ds) #t = -5.532, df = 191.71, p-value = 1.028e-07
+
+t.test(FinalDistance~path, data=dsm) #t = -4.9522, df = 94.802, p-value = 3.191e-06
+t.test(FinalDistance~path, data=dsf) #t = -2.5484, df = 97.375, p-value = 0.01238
+
+wilcox.test(FinalDistance~path, data=dsm) #W = 5058.5, p-value = 9.433e-07
+wilcox.test(FinalDistance~path, data=dsf) #W = 3006, p-value = 0.1012
+
+
+summarySE(ds, measurevar="FinalDistance", groupvars=c("Sex", "path"), na.rm=T)
+#Sex        path   N FinalDistance        sd        se        ci
+#1   F      direct 107      923.3247  681.7324  65.90556 130.66418
+#2   F subordinate  66     1300.9687 1078.2726 132.72618 265.07248
+#3   M      direct 208      463.7319  395.7298  27.43892  54.09557
+#4   M subordinate  78      891.5705  723.5074  81.92108 163.12570
+
+# -> 173 females 286 males
+
+ggplot(ds, aes(x=Sex, y=FinalDistance, fill=path)) +
+    stat_boxplot(aes(x=Sex, y=FinalDistance, fill=path), geom="errorbar", position = position_dodge(width=.75), width=.5) +
+  geom_boxplot(aes(fill=path), outlier.size=1.5, position=position_dodge(width=.75)) +
+  theme_classic()+ 
+  theme(axis.text=element_text(size=14, color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        axis.text.x=element_text(size=14, color="black"), 
+        axis.text.y=element_text(size=14, color="black"),
+        legend.text = element_text(size=14, color="black"),
+        legend.title = element_text(size=14, color="black", face="bold"))+
+  labs(fill="Dispersal pathway", y = "Dispersal distance (m)") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Staging"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+ggsave("dispersal_distance_colored.tiff", plot = ggplot2::last_plot(), width=177, height=130, units="mm", dpi=300)
+
+
+## With stats comparison
+dist <- ggplot(ds, aes(x=Sex, y=FinalDistance, fill=path)) +
+  stat_boxplot(aes(x=Sex, y=FinalDistance, fill=path), geom="errorbar", position = position_dodge(width=.75), width=.5) +
+  geom_boxplot(aes(fill=path), outlier.size=1.5, position=position_dodge(width=.75), fatten=4) +
+  theme_classic()+ 
+  stat_compare_means(method = "wilcox.test", label="p.signif", size=10, symnum.args=m) +
+  theme(axis.text=element_text(size=16, color="black"),
+        axis.title=element_text(size=18,face="bold",color="black"),
+        axis.text.x=element_text(size=16, color="black"), 
+        axis.text.y=element_text(size=16, color="black"),
+        legend.text = element_text(size=16, color="black"),
+        legend.title = element_text(size=16, color="black", face="bold"))+
+  labs(fill="Dispersal pathway", y = "Dispersal distance (m)") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Staging"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+dist
+ggsave("dispersal_distance_colored_stats.tiff", plot = ggplot2::last_plot(), width=177, height=130, units="mm", dpi=300)
+```
+
+
+
+```{r plot age and distance}
+pg <- plot_grid(
+  age + theme(legend.position="none"),
+  dist + theme(legend.position="none"),
+  align = 'vh',
+  labels = c("A", "B"),
+  hjust = -1,
+  nrow = 1, label_size = 22
+)
+
+disp_lg <- get_legend(age + theme(legend.box.margin = margin(0,0,0,12)))
+
+plot_grid(pg, disp_lg, rel_widths = c(3, .6))
+
+ggsave("dispersal_age_distance_new.tiff", plot=last_plot(), width=400, height=200, units="mm", dpi=300, scale=T)
+```
+
+
+
+
+<br> 
+
+# Reproductive success
+## Look at fledgies and breeding seasons alive
+Load repro data
+```{r Reproductive success data}
+repro <- read_excel("reproductivesuccess.xlsx")
+
+repr <- repro[,c("USFWBand", "sum_egg", "count_egg", "sum_hatch", "count_hatch", "sum_fledge", "breedingseasons")]
+
+
+#Join with rest
+fitness <- ds  %>% 
+  left_join(repr, by = "USFWBand", keep = F)
+
+#check histograms
+hist(fitness$sum_egg) #total eggs produced
+hist(fitness$count_egg) #number of clutch attempts
+hist(fitness$sum_hatch) #total hatched
+hist(fitness$count_hatch) #number of clutch attempts
+hist(fitness$sum_fledge) #total fledged
+
+# summary values
+summarySE(fitness, measurevar = "sum_fledge", groupvars = c("Sex", "path"), na.rm=T)
+#  Sex        path   N sum_fledge       sd        se        ci
+#3   M      direct 203   7.438424 6.260824 0.4394237 0.8664458
+#4   M subordinate  80   5.825000 6.665184 0.7451903 1.4832641
+#1   F      direct 112   6.598214 6.528468 0.6168823 1.2223934
+#2   F subordinate  71   7.436620 6.287703 0.7462131 1.4882751
+
+
+## split by sex
+fitm <- fitness[which(fitness$Sex == "M"),]
+fitf <- fitness[which(fitness$Sex == "F"),]
+```
+
+
+Statistical tests
+```{r Reproductive success - fledglings}
+# total fledged [used]
+t.test(sum_fledge~path, data=fitm) #t = 1.865, df = 137.01, p-value = 0.06432
+t.test(sum_fledge~path, data=fitf) #t = -0.86596, df = 153.24, p-value = 0.3879
+
+wilcox.test(sum_fledge~path, data=fitm) #W = 9844, p-value = 0.005287
+wilcox.test(sum_fledge~path, data=fitf) #W = 3594, p-value = 0.272
+
+qqnorm(fitm$sum_fledge)
+qqline(fitm$sum_fledge, col = "steelblue", lwd = 2)
+
+qqnorm(fitf$sum_fledge)
+qqline(fitf$sum_fledge, col = "steelblue", lwd = 2)
+```
+
+Plot
+```{r Reproductive success - fledglings plot}
+# Fledgies
+ggplot(fitness, aes(x=Sex, y=sum_fledge, fill=path)) +
+    stat_boxplot(aes(x=Sex, y=sum_fledge, fill=path), geom="errorbar", position = position_dodge(width=.75), width=.5) +
+  geom_boxplot(aes(fill=path), outlier.size=1.5, position=position_dodge(width=.75)) +
+  theme_classic()+ 
+  stat_compare_means(method = "t.test", label="p.signif", size=5, symnum.args=m, label.y=34) +
+  theme(axis.text=element_text(size=14, color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        axis.text.x=element_text(size=14, color="black"), 
+        axis.text.y=element_text(size=14, color="black"),
+        legend.text = element_text(size=14, color="black"),
+        legend.title = element_text(size=14, color="black", face="bold"))+
+  labs(fill="Dispersal pathway", y = "Total number of fledglings produced") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Subordinate"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+ggsave("path.fledgies_colored_stats.tiff", plot = ggplot2::last_plot(), width=177, height=130, units="mm", dpi=300)
+
+
+# violin
+
+FLG <- ggplot(fitness, aes(x=Sex, y=sum_fledge, fill=path)) +
+  geom_violin(aes(fill=path), position=position_dodge(width=.75)) +
+  stat_summary(fun.data = "mean_se",  geom = "pointrange", position = position_dodge(width=.75)) +
+  theme_classic()+ 
+  stat_compare_means(method = "t.test", label="p.signif", size=10, symnum.args=m, label.y=34) +
+  theme(axis.text=element_text(size=16, color="black"),
+        axis.title=element_text(size=18,face="bold",color="black"),
+        axis.text.x=element_text(size=16, color="black"), 
+        axis.text.y=element_text(size=16, color="black"),
+        legend.text = element_text(size=16, color="black"),
+        legend.title = element_text(size=16, color="black", face="bold"))+
+  theme(legend.position = "none")+
+  labs(fill="Dispersal pathway", y = "Lifetime fledgling production") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Subordinate"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+ggsave("path.fledgies_colored_stats_violin.tiff", plot = FLG, width=177, height=130, units="mm", dpi=600)
+
+# violin with box
+FLG2 <- ggplot(fitness, aes(x=Sex, y=sum_fledge, fill=path)) +
+  geom_violin(aes(fill=path), position=position_dodge(width=.75)) +
+  geom_boxplot(aes(fill=path), width=0.1, fatten=4, position=position_dodge(width=.75), outlier.shape = NA) + 
+  theme_classic()+ 
+  stat_compare_means(method = "t.test", label="p.signif", size=10, symnum.args=m, label.y=34) +
+  theme(axis.text=element_text(size=20, color="black"),
+        axis.title=element_text(size=22,face="bold",color="black"),
+        axis.text.x=element_text(size=20, color="black"), 
+        axis.text.y=element_text(size=20, color="black"),
+        legend.text = element_text(size=20, color="black"),
+        legend.title = element_text(size=22, color="black", face="bold"))+
+  theme(legend.position = "none")+
+  labs(fill="Dispersal pathway", y = "Lifetime fledgling production") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Subordinate"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+FLG2
+```
+
+Remove incomplete cohorts
+```{r Reproductive success - breeding seasons alive}
+max(fitness$LveTerr) # 2019-12-17
+
+living <- fitness[which(fitness$LveTerr == "2019-12-17"),]
+table(living$YearBorn) #2007 is the earliest
+
+
+# only look at birds before 2007
+fitness2010 <- fitness[which(fitness$YearBorn < 2011),] # n = 1078
+
+summarySE(fitness2010, measurevar = "breedingseasons", groupvars = c("Sex", "path"), na.rm=T)
+#  Sex        path   N breedingseasons       sd        se        ci
+#3   M      direct 178        4.365169 3.179440 0.2383091 0.4702928
+#4   M subordinate  80        3.475000 3.129990 0.3499435 0.6965451
+#1   F      direct  92        4.163043 2.774599 0.2892719 0.5746032
+#2   F subordinate  63        4.523810 3.026001 0.3812403 0.7620885
+
+# split by sex
+fit10m <- fitness2010[fitness2010$Sex == "M",] # n = 542; but have data for 258 breeding seasons
+fit10f <- fitness2010[fitness2010$Sex == "F",] # n = 536; but have data for 155 breeding seasons
+
+# Stats
+t.test(breedingseasons~path, data=fit10m) #t = 2.1025, df = 154.44, p-value = 0.03713
+t.test(breedingseasons~path, data=fit10f) #t = -0.75385, df = 125.58, p-value = 0.4523
+
+wilcox.test(breedingseasons~path, data=fit10m) #W = 8441.5, p-value = 0.01547
+wilcox.test(breedingseasons~path, data=fit10f) #W = 2739, p-value = 0.5603
+
+# plots
+## boxplot
+ggplot(fitness2010, aes(x=Sex, y=breedingseasons, fill=path)) +
+    stat_boxplot(aes(x=Sex, y=breedingseasons, fill=path), geom="errorbar", position = position_dodge(width=.75), width=.5) +
+  geom_boxplot(aes(fill=path), outlier.size=1.5, position=position_dodge(width=.75)) +
+  theme_classic()+ 
+  stat_compare_means(method = "t.test", label="p.signif", size=5, symnum.args=m, label.y=13.5) +
+  theme(axis.text=element_text(size=14, color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        axis.text.x=element_text(size=14, color="black"), 
+        axis.text.y=element_text(size=14, color="black"),
+        legend.text = element_text(size=14, color="black"),
+        legend.title = element_text(size=14, color="black", face="bold"))+
+  labs(fill="Dispersal pathway", y = "Number of breeding seasons") +
+  scale_fill_manual(values=pal2, labels=c("Natal", "Non-natal"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+ggsave("path.breedingseasons_colored_2010_stats.tiff", plot = ggplot2::last_plot(), width=177, height=130, units="mm", dpi=300)
+
+
+
+## violin
+BSA <- ggplot(fitness2010, aes(x=Sex, y=breedingseasons, fill=path)) +
+  geom_violin(aes(fill=path), position=position_dodge(width=.75)) +
+  stat_summary(fun.data = "mean_se",  geom = "pointrange", position = position_dodge(width=.75)) + 
+  theme_classic()+ 
+  stat_compare_means(method = "t.test", label="p.signif", size=10, symnum.args=m, label.y=13.5) +
+  theme(axis.text=element_text(size=16, color="black"),
+        axis.title=element_text(size=18,face="bold",color="black"),
+        axis.text.x=element_text(size=16, color="black"), 
+        axis.text.y=element_text(size=16, color="black"),
+        legend.text = element_text(size=16, color="black"),
+        legend.title = element_text(size=16, color="black", face="bold"))+
+  theme(legend.position = "none")+
+  labs(fill="Dispersal pathway", y = "Number of breeding seasons") +
+  scale_fill_manual(values=pal2, labels=c("Natal", "Non-natal"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+BSA
+
+# violin with box
+BSA2 <- ggplot(fitness2010, aes(x=Sex, y=breedingseasons, fill=path)) +
+  geom_violin(aes(fill=path), position=position_dodge(width=.75)) +
+  geom_boxplot(aes(fill=path), width=0.1, fatten=4, position=position_dodge(width=.75), outlier.shape = NA) + 
+  theme_classic()+ 
+  stat_compare_means(method = "t.test", label="p.signif", size=10, symnum.args=m, label.y=13.5) +
+  theme(axis.text=element_text(size=20, color="black"),
+        axis.title=element_text(size=22,face="bold",color="black"),
+        axis.text.x=element_text(size=20, color="black"), 
+        axis.text.y=element_text(size=20, color="black"),
+        legend.text = element_text(size=20, color="black"),
+        legend.title = element_text(size=22, color="black", face="bold"))+
+  theme(legend.position = "none")+
+  labs(fill="Dispersal pathway", y = "Number of breeding seasons") +
+  scale_fill_manual(values=pal2, labels=c("Natal", "Non-natal"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+BSA2
+
+ggsave("path.breedingseasons_colored_2010_stats_violin.tiff", plot = BSA, width=177, height=130, units="mm", dpi=600)
+```
+
+
+< br >
+
+
+# Convert to annual data
+
+## Tidy data
+Bring script relating to `dat7` from "subordinatedispersal.Rmd" and filter out necessary columns.
+```{r Convert to annual 1 - extract columns}
+new <- dat3 %>% 
+  select(USFWBand, Sex, NatalNest, YearBorn, AtTerr, ArrCensusNew, ArrTerrYr, LveCensusNew, LveTerrYr, Type, Soc, EventDate, Nterrbtwn, path, recNum, LastObs, BecameBreeder) %>% 
+  as.data.frame()
+```
+
+Bring in census info
+```{r Convert to annual 2 - census info}
+# Match ArrTerr and LveTerr
+# shorter code!!!!
+new2 <- new %>% 
+  left_join(cen_short, c("ArrCensusNew" = "CensusDate")) %>% 
+  left_join(cen_short, c("LveCensusNew" = "CensusDate"), suffix = c("_arr", "_lve")) %>% 
+  mutate(ArrTerrCen = CensusN_arr,
+         ArrTerrMo = month_arr,
+         LveTerrCen = CensusN_lve,
+         LveTerrMo = month_lve) %>% 
+  select(-CensusN_arr, -month_arr, -CensusN_lve, -month_lve) %>% 
+  mutate(ArrTerr = ArrCensusNew,
+         LveTerr = LveCensusNew) %>% 
+  select(-ArrCensusNew, -LveCensusNew) %>% 
+  as.data.frame()
+
+n_distinct(new2$USFWBand) #n=1401
+
+
+# extract variables of interest
+new3 <- new2 %>% 
+  mutate(ATY = format(ArrTerr, "%y"),
+         ArrTerrYr = paste(AtTerr, ATY, sep="")) %>%  # New ArrTerrYr based on the new census arrival date
+  select(USFWBand, Sex, NatalNest, YearBorn, AtTerr, Type, Soc, ArrTerr, ArrTerrYr, ArrTerrCen, ArrTerrMo, LveTerr, LveTerrCen, LveTerrMo, LveTerrYr,  Nterrbtwn, path, recNum, BecameBreeder) %>% 
+  as.data.frame()
+
+# Long format using census id
+expandeddat <- do.call(rbind, apply(new3, 1, function(x) {
+  data.frame(id=x[1], sex=x[2], atTerr = x[5], census=seq(x[10], x[13]), type=x[6], social=x[7], path=x[17], nterrbtwn = x[16], becomebreeder=x[19])}))
+#n = 42694
+
+
+### check for those birds with gaps!!!
+
+expandeddat$home <- ifelse(expandeddat$social == "Offspring", "home", "elsewhere")
+
+# minimal version
+cen2 <- cen %>% select(CensusN, CensusDate, month)
+
+# left join
+expanddat2 <- expandeddat %>% 
+  left_join(cen2, by=c("census"="CensusN"), keep = F)
+
+expanddat2 <- as.data.frame(expanddat2)
+
+# Add counter 
+expanddat2 <- expanddat2 %>%
+  arrange(id, census) %>%
+  group_by(id) %>%
+  dplyr::mutate(records = n(), recNum = 1:n()) %>%
+  dplyr::mutate(LastObs = ifelse(records == recNum, 1, 0))
+```
+
+
+< br >
+
+## Tidy data with new breeding season range 
+
+Instead of old april censuses; pick minimum date from Mar-Jul??? -> How to do this? 
+
+Maybe set it so that it has year then set it so that breedingseason: month = 3 - 7 has 1, rest 0 (or something like that) then get min(breedingseason) tied with a year and have that as a recN??? 
+
+Add year with CensusN 1-12 is year 1 (March-Feb) and 12 increments?? But how to do it per bird? 
+
+```{r Convert to annual 3 - new breeding season range}
+# Create a column indicating whether the census month was during the breeding season or not
+# use %<% from library(TeachingDemos)
+expanddat3 <- expanddat2 %>% 
+  mutate(breedingseasons = ifelse(2 %<% month %<% 8, "breed", "no"),
+         year = format(as.Date(CensusDate, format = "%d/%m/%Y"),"%Y")) 
+
+# extract first record (natal) and the first record of the breeding season
+# add a counter for each breeding season
+# extract brseyear = 1 
+anndat <- expanddat3 %>% 
+  arrange(id, census) %>% 
+  group_by(id) %>% 
+  filter(recNum == 1 | breedingseasons == "breed") %>% 
+  group_by(id, year) %>% 
+  mutate(brseyear = 1:n()) %>%  # add counter for each year
+  select(-records, -recNum, -LastObs, -breedingseasons) # get rid of unused columns
+# filter(brseyear == 1) %>% # extract the first record of the year (this captures the natal one) 
+#  group_by(id) %>% 
+#  mutate(recn = 1:n()) # add counter for each bird
+
+# BUT this doesn't work for birds that were helpers earlier in the breeding season (march) then become breeders later (e.g. may)
+
+# examples 
+# View(anndat[which(anndat$id == "1453-78122"),]) 1043-80139
+# View(anndat[which(anndat$id == "1043-80139"),])
+
+
+# What if I get the lest value for the year-breeding season? 
+# Which will be in July for those that live past that or if they die, it'll still be the last record
+# seems to work
+
+anndat2 <- anndat %>% 
+  group_by(id, year) %>% 
+  slice(c(n())) %>% 
+  select(-brseyear) %>% 
+  as.data.frame()
+
+# check birds
+# View(anndat2[which(anndat2$id == "1453-78122"),]) 
+# View(anndat2[which(anndat2$id == "1043-80139"),]) 
+
+# 4505 rows versus 4388 from annualdat using recNum = 1 and month = 4   
+n_distinct(anndat2$id) # n = 1401
+```
+
+
+## Remove rows as breeder except the first one
+i.e. add counter for each social record, remove all but the first for type=="Breeding" and make that become turnedbreeder==1 
+
+```{r Convert to annual 4 - alter breeding}
+anndat3 <- anndat2 %>% 
+  arrange(id, census) %>% 
+  group_by(id, social) %>% 
+  mutate(records = n(), 
+         socyear = 1:n()) %>% 
+  mutate(turnedbreeder = ifelse(becomebreeder == "Yes" & type=="Breeding", 1, 0),
+         breeding = ifelse(type == "Breeding" & socyear > 1, "remove", "no")) %>% 
+  filter(breeding != "remove") %>% 
+  select(-breeding, -records) %>% 
+  group_by(id) %>% 
+  mutate(yearsalive = n(), recn = 1:n(),
+         lastobs = ifelse(yearsalive == recn, 1, 0)) %>% 
+  as.data.frame() 
+
+n_distinct(anndat3$id) # n = 1401 
+
+
+# split by sex
+adf <- anndat3[which(anndat3$sex == "F"),] #1512, 692 unique
+adm <- anndat3[which(anndat3$sex == "M"),] #1708, 709 unique
+
+
+# check jays -> look good
+# View(anndat3[which(anndat3$id == "1043-90502"),])
+# View(anndat3[which(anndat3$id == "1063-43555"),])
+# View(anndat3[which(anndat3$id == "1423-42697"),])
+```
+
+Check for jays: "1043-90502" "1063-43555" "1423-42697" "1453-39093" "1453-39097" "1453-78124" "1513-50325" "1513-50726" "1713-90110" "1713-90157" "1713-90168"; seem to be okay
+
+```{r Convert to annual 5 - check for anomalies}
+# Who are birds that become a breeding but have a subordinate path? 
+# i.e. no info on subordinate territory thus no row for it 
+# OR if on subordinate territory on non-breeding season 
+# OR if subordinate at start of breeding season but become breeder
+# View(adf[which(adf$path == "subordinate" & adf$recn==2 & adf$type == "Breeding"),])
+# -> 6 birds: 1013-63313, 1453-63591, 1513-50992, 1603-51150, 1603-51196, 1713-89785
+
+# How do I know where these birds were before they leave? 
+# I might need to get the record of the social OR home for the row above... 
+anndat4 <- anndat3 %>% 
+  arrange(id, census) %>% 
+  group_by(id) %>% 
+  mutate(prior = ifelse(type == "Natal" & recn == 1, "Notborn", lag(type))) %>% 
+  mutate(dispyear = ifelse(yearsalive == max(socyear[type=="Natal"]),  0, max(socyear[type=="Natal"]))) %>% 
+  as.data.frame()
+
+
+# Note: Birds that have odd cutoffs so don't have a record for social=Breeding even though they BecameBreeder=1
+odds <- anndat3 %>% 
+  arrange(id, census) %>% 
+  group_by(id) %>% 
+  filter(becomebreeder == "Yes" & max(turnedbreeder) == 0) # n = 116 rows
+n_distinct(odds$id) # n = 4 birds
+# 1603-17471, 1603-51598, 1713-49099, 1713-49719 -> marked as dominant in Sep/Oct? but dies before March
+# remove these birds for now
+# 1603-17471 -> breeder at year 2, M
+# 1603-51598 -> breeder at year 3, M
+# 1713-49099 -> breeder at year 2, F
+# 1713-49719 -> breeder at year 2, F
+
+anndat5 <- anndat4 %>% 
+  add_row(id = "1603-17471", 
+          sex = "M", 
+          atTerr = "FRED", 
+          census = 380, 
+          type = "Breeding", 
+          social = "Dominant", 
+          path = "direct", 
+          nterrbtwn = "0", 
+          becomebreeder = "Yes", 
+          home = "elsewhere", 
+          CensusDate = as.Date("2008-10-15"), 
+          month = 10, 
+          year = "2009", 
+          socyear = 1, 
+          turnedbreeder = 1, 
+          yearsalive = 2, 
+          recn = 3, 
+          lastobs = 1, 
+          prior = "Natal", 
+          dispyear = 2) %>% 
+  add_row(id = "1603-51598", 
+          sex = "M", 
+          atTerr = "RAUL", 
+          census = 403, 
+          type = "Breeding", 
+          social = "Dominant", 
+          path = "direct", 
+          nterrbtwn = "0", 
+          becomebreeder = "Yes", 
+          home = "elsewhere", 
+          CensusDate = as.Date("2010-09-15"), 
+          month = 09, 
+          year = "2011", 
+          socyear = 1, 
+          turnedbreeder = 1, 
+          yearsalive = 3, 
+          recn = 4, 
+          lastobs = 1, 
+          prior = "Natal", 
+          dispyear = 3) %>% 
+  add_row(id = "1713-49099", 
+          sex = "M", 
+          atTerr = "YTRE", 
+          census = 426, 
+          type = "Breeding", 
+          social = "Dominant", 
+          path = "direct", 
+          nterrbtwn = "0", 
+          becomebreeder = "Yes", 
+          home = "elsewhere", 
+          CensusDate = as.Date("2012-08-22"), 
+          month = 08, 
+          year = "2013", 
+          socyear = 1, 
+          turnedbreeder = 1, 
+          yearsalive = 2, 
+          recn = 3, 
+          lastobs = 1, 
+          prior = "Natal", 
+          dispyear = 2) %>% 
+   add_row(id = "1713-49719", 
+          sex = "F", 
+          atTerr = "CRMB", 
+          census = 452, 
+          type = "Breeding", 
+          social = "Dominant", 
+          path = "direct", 
+          nterrbtwn = "0", 
+          becomebreeder = "Yes", 
+          home = "elsewhere", 
+          CensusDate = as.Date("2014-10-15"), 
+          month = 10, 
+          year = "2015", 
+          socyear = 1, 
+          turnedbreeder = 1, 
+          yearsalive = 2, 
+          recn = 3, 
+          lastobs = 1, 
+          prior = "Natal", 
+          dispyear = 2) %>% 
+  as.data.frame()
+  
+
+#View(anndat4[which(anndat4$id=="1603-17471"),])
+#View(anndat4[which(anndat4$id=="1603-51598"),])
+#View(anndat4[which(anndat4$id=="1713-49099"),])
+#View(anndat4[which(anndat4$id=="1713-49719"),])
+
+
+# fix their prior rows
+anndat5$lastobs[anndat5$id == "1603-17471" & anndat5$recn == 2] <- 0
+anndat5$lastobs[anndat5$id == "1603-51598" & anndat5$recn == 3] <- 0
+anndat5$lastobs[anndat5$id == "1713-49099" & anndat5$recn == 2] <- 0
+anndat5$lastobs[anndat5$id == "1713-49719" & anndat5$recn == 2] <- 0
+
+# fix dispyear
+anndat5$dispyear[anndat5$id == "1603-17471"] <- 2
+anndat5$dispyear[anndat5$id == "1603-51598"] <- 3
+anndat5$dispyear[anndat5$id == "1713-49099"] <- 2
+anndat5$dispyear[anndat5$id == "1713-49719"] <- 2
+
+# View
+#View(anndat5[which(anndat5$id=="1603-17471"),])
+#View(anndat5[which(anndat5$id=="1603-51598"),])
+#View(anndat5[which(anndat5$id=="1713-49099"),])
+#View(anndat5[which(anndat5$id=="1713-49719"),])
+
+
+# fix bird with odd values because it disperses and dies in 4 months
+anndat5$prior[anndat5$id == "1453-39090"] <- "Notborn"
+anndat5$dispyear[anndat5$id == "1453-39090"] <- 0
+
+anndat5$prior[anndat5$id == "1453-39088"] <- "Notborn"
+anndat5$dispyear[anndat5$id == "1453-39088"] <- 0
+
+anndat5$prior[anndat5$id == "1453-39089"] <- "Notborn"
+anndat5$dispyear[anndat5$id == "1453-39089"] <- 0
+
+# Split by sex
+adf2 <- anndat5[which(anndat5$sex == "F"),] # 692 unique IDs
+adm2 <- anndat5[which(anndat5$sex == "M"),] # 709 unique IDs
+```
+
+
+## Get summary stats
+1) Females
+```{r Annual summary stats - females}
+# Summary values
+table(adf2$recn)
+table(adf2$recn, adf2$type)
+table(adf2$recn, adf2$path)
+table(adf2$recn, adf2$type, adf2$path)
+View(adf2[which(adf2$recn == 1 & adf2$type == "Transient"),]) #1453-39090; this one died as transient after 3months
+View(adf2[which(adf2$recn == 1 & adf2$path == "subordinate" & adf2$lastobs == 1),]) 
+
+
+table(adf2$recn, adf2$type, adf2$path)
+table(adf2$recn, adf2$type, adf2$prior)
+table(adf2$recn, adf2$type, adf2$path, adf2$prior)
+table(adf2$recn, adf2$type, adf2$path, adf2$prior, adf2$lastobs)
+
+
+table(adf2$recn, adf2$type, adf2$path, adf2$prior, adf2$lastobs, adf2$becomebreeder)
+
+#View(adf2[which(adf2$recn == 2 & adf2$path == "subordinate" & adf2$lastobs == 1 & adf2$prior == "Natal" & adf2$type == "Transient"),])
+
+table(adf2$recn, adf2$type, adf2$path, adf2$prior, adf2$dispyear)
+```
+
+2) Males
+```{r Annual summary stats - males}
+table(adm2$recn)
+table(adm2$recn, adm2$type)
+table(adm2$recn, adm2$path,adm2$prior, adm2$lastobs)
+table(adm2$recn, adm2$type, adm2$path, adm2$prior, adm2$lastobs)
+
+table(adm2$recn, adm2$type, adm2$path, adm2$prior, adm2$dispyear)
+
+y6 <- adm2[which(adm2$recn > 5),]
+table(y6 $recn, y6 $type, y6 $path, y6 $prior, y6 $dispyear)
+
+View(adm2[which(adm2$recn == 1 & adm2$type == "Transient"),]) #1453-39090; this one died as transient after 3months
+
+
+die1 <- adm2[which(adm2$lastobs == 1 & adm2$recn==1),]
+table(die1$path)
+
+die2 <- adm2[which(adm2$lastobs == 1 & adm2$recn==2 & adm2$prior == "Natal" & adm2$becomebreeder == "No"),]
+table(die2$path)
+
+die3 <- adm2[which(adm2$lastobs == 1 & adm2$recn==3 & adm2$prior == "Natal" & adm2$becomebreeder == "No"),]
+table(die3$path)
+
+die4 <- adm2[which(adm2$lastobs == 1 & adm2$recn==4 & adm2$prior == "Natal" & adm2$becomebreeder == "No"),]
+table(die4$path)
+```
+
+
+< br >
+
+## Age at first breeding
+In years; recn when turnedbreeder = 1 
+
+- > used to get number that became breeders for *RESULTS*
+```{r Age at first breeding in years}
+afb <- anndat5[which(anndat5$turnedbreeder == 1),]
+afbf <- adf2[which(adf2$turnedbreeder == 1),] # n = 209
+afbm <- adm2[which(adm2$turnedbreeder == 1),] # n = 338
+
+# females
+summarySE(afbf, measurevar = "recn", groupvars = "path", na.rm=T)
+#         path   N     recn        sd         se        ci
+#1      direct 127 3.267717 0.7286519 0.06465740 0.1279551
+#2 subordinate  82 3.341463 0.6888801 0.07607409 0.1513636
+
+t.test(recn~path, data=afbf) #t = -0.73866, df = 179.93, p-value = 0.4611
+wilcox.test(recn~path, data=afbf) #W = 4884.5, p-value = 0.398
+
+
+# males
+summarySE(afbm, measurevar = "recn", groupvars = "path", na.rm=T)
+#         path   N     recn        sd         se        ci
+#1      direct 243 3.230453 0.8554508 0.05487719 0.1080979
+#2 subordinate  95 3.494737 0.9210734 0.09450014 0.1876322
+
+t.test(recn~path, data=afbm) #t = -2.4184, df = 160.98, p-value = 0.0167
+# significantly different but within 1 year? 
+wilcox.test(recn~path, data=afbm) #W = 9488.5, p-value = 0.003123
+
+# plot
+## boxplot
+ggplot(afb, aes(x=sex, y=recn, fill=path)) +
+  stat_boxplot(aes(x=sex, y=recn, fill=path), geom="errorbar", position = position_dodge(width=.75), width=.5) +
+  geom_boxplot(aes(fill=path), outlier.size=1.5, position=position_dodge(width=.75)) +
+  theme_classic()+ 
+  theme(axis.text=element_text(size=14, color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        axis.text.x=element_text(size=14, color="black"), 
+        axis.text.y=element_text(size=14, color="black"),
+        legend.text = element_text(size=14, color="black"),
+        legend.title = element_text(size=14, color="black", face="bold"))+
+  labs(fill="Dispersal pathway", y = "Age at first breeding (in years)") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Subordinate"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+ggsave("agefirstbreeding_colored_box.tiff", plot = ggplot2::last_plot(), width=177, height=130, units="mm", dpi=300)
+
+## violin plot
+ggplot(afb, aes(x=sex, y=recn, fill=path)) +
+  stat_boxplot(aes(x=sex, y=recn, fill=path), geom="errorbar", position = position_dodge(width=.75), width=.1) +
+  geom_violin(aes(fill=path), outlier.size=1.5, position=position_dodge(width=.75)) +
+  geom_boxplot(width = 0.1, position=position_dodge(width=.75)) +
+  stat_compare_means(method = "t.test", label="p.signif", size=5, symnum.args=m, label.y=34) +
+  theme_classic()+ 
+  theme(axis.text=element_text(size=14, color="black"),
+        axis.title=element_text(size=16,face="bold",color="black"),
+        axis.text.x=element_text(size=14, color="black"), 
+        axis.text.y=element_text(size=14, color="black"),
+        legend.text = element_text(size=14, color="black"),
+        legend.title = element_text(size=14, color="black", face="bold"))+
+  theme(legend.position = "none")+
+  labs(fill="Dispersal pathway", y = "Age at first breeding (in years)") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Subordinate"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+
+AFB <- ggplot(afb, aes(x=sex, y=recn, fill=path)) +
+  geom_violin(aes(fill=path), position=position_dodge(width=.75)) +
+  stat_summary(fun.data = "mean_se",  geom = "pointrange", position = position_dodge(width=.75)) +
+  theme_classic()+ 
+  stat_compare_means(method = "t.test", label="p.signif", size=10, symnum.args=m) +
+  theme(axis.text=element_text(size=16, color="black"),
+        axis.title=element_text(size=18,face="bold",color="black"),
+        axis.text.x=element_text(size=16, color="black"), 
+        axis.text.y=element_text(size=16, color="black"),
+        legend.text = element_text(size=16, color="black"),
+        legend.title = element_text(size=16, color="black", face="bold"))+
+  labs(fill="Dispersal strategy", y = "Age at first breeding (in years)") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Subordinate"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+AFB
+ggsave("agefirstbreeding_colored_violin.tiff", plot = AFB, width=177, height=130, units="mm", dpi=600)
+
+
+# violin with box
+afb$age <- afb$recn-1 
+AFB2 <- ggplot(afb, aes(x=sex, y=age, fill=path)) +
+  geom_violin(aes(fill=path), position=position_dodge(width=.75)) +
+  geom_boxplot(aes(fill=path), width=0.1, fatten=4, position=position_dodge(width=.75), outlier.shape = NA) + 
+  theme_classic()+ 
+  stat_compare_means(method = "t.test", label="p.signif", size=10, symnum.args=m) +
+  theme(axis.text=element_text(size=20, color="black"),
+        axis.title=element_text(size=22,face="bold",color="black"),
+        axis.text.x=element_text(size=20, color="black"), 
+        axis.text.y=element_text(size=20, color="black"),
+        legend.text = element_text(size=20, color="black"),
+        legend.title = element_text(size=22, color="black", face="bold"))+
+  labs(fill="Dispersal strategy", y = "Age at first breeding (in years)") +
+  scale_fill_manual(values=pal2, labels=c("Direct", "Subordinate"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+AFB2
+```
+
+
+### Plot violin plots together
+
+```{r Violin plots}
+prow_repro <- plot_grid(
+  AFB2 + theme(legend.position="none"),
+  BSA2 + theme(legend.position="none"),
+  FLG2 + theme(legend.position="none"),
+  align = 'vh',
+  labels = c("A", "B", "C"),
+  hjust = -1,
+  nrow = 1, label_size = 22
+)
+
+leg_repro <- get_legend(AFB2 + theme(legend.box.margin = margin(0,0,0,12)))
+
+plot_grid(prow_repro, leg_repro, rel_widths = c(3, .4))
+
+ggsave("violins.tiff", plot=last_plot(), width=600, height=200, units="mm", dpi=500, scale=T)
+```
+
+
+< br> 
+
+# GLMM 
+
+```{r GLMM models}
+# make response into binomial
+firstleave$path_b <- as.factor(firstleave$path)
+firstleave$path_n <- ifelse(firstleave$path_b == "direct", 0, 1)
+
+# add breeder alive/dead
+firstleave$mb <- ifelse(firstleave$mbaliveatleave == "yes", 1, 0)
+firstleave$fb <- ifelse(firstleave$fbaliveatleave == "yes", 1, 0)
+
+# left join to add helper count
+fl <- firstleave %>% 
+  left_join(ty, by = c("LveTerrYr" = "TerrYr")) %>% 
+  mutate(lveyr =format(LveTerr, "%Y")) %>% 
+  mutate(grpsze = HelpNum + 2)
+
+# add standardized (rescale & center)
+fl$scr <- scale(fl$NatalScrub)
+fl$nf9 <- scale(fl$Natalf9) 
+fl$mh <- scale(fl$Mhelper)
+fl$fh <- scale(fl$Fhelper)
+fl$gs <- scale(fl$grpsze)
+
+# split by sex
+flm <- fl[which(fl$Sex == "M"),]
+flf <- fl[which(fl$Sex == "F"),]
+
+
+
+### Model for Males
+glmm_m <- glmer(path_n ~ scr + nf9 + mh + mb + fb + (1|AtTerr) + (1|lveyr), data= flm, family="binomial") 
+glmm_m2 <- glmer(path_n ~ scr + nf9 + mh + mb + fb + (1|LveTerrYr), data= flm, family="binomial") 
+
+# with interaction
+glmm_m3 <- glmer(path_n ~ scr + nf9 + mh + mb + fb + gs:scr + (1|LveTerrYr), data= flm, family="binomial")
+glmm_m4 <- glmer(path_n ~ scr + nf9 + mh + mb + fb + gs:scr + (1|AtTerr) + (1|lveyr), data= flm, family="binomial") # singular
+
+# use glmmTMB
+glmmtmb_m <- glmmTMB(path_n ~ scr + nf9 + mh + mb + fb + (1|AtTerr) + (1|lveyr), data= flm, family="binomial")
+
+# check summaries
+summary(glmm_m)
+summary(glmm_m2)
+summary(glmm_m3) # FINAL? 
+summary(glmm_m4) # singluar
+
+summary(glmmtmb_m)
+
+vif(glmm_m) # all below 1.28
+vif(glmm_m3) # all below 2.02
+
+
+performance::check_model(glmm_m3)
+performance::model_performance(glmm_m3)
+
+
+#### Model for Females
+glmm_f <- glmer(path_n ~ scr + nf9 + fh + mb + fb + (1|AtTerr) + (1|lveyr), data= flf, family="binomial") # failed to converge
+glmm_f2 <- glmer(path_n ~ scr + nf9 + fh + mb + fb + (1|LveTerrYr), data= flf, family="binomial") # good
+
+glmm_f3 <- glmer(path_n ~ scr + nf9 + fh + mb + fb + gs:scr + (1|LveTerrYr), data= flf, family="binomial")
+glmm_f3_1 <- glmer(path_n ~ scr + nf9 + fh + mb + fb + gs:scr + (1|AtTerr) + (1|lveyr), data= flf, family="binomial")
+summary(glmm_f3_1)
+
+anova(glmm_f, glmm_f2) #significant; choose 2
+anova(glmm_f2, glmm_f) #not significant; choose 2
+
+glmmtmb_f <- glmmTMB(path_n ~ scr + nf9 + fh + mb + fb + (1|AtTerr) + (1|lveyr), data= flf, family="binomial")
+
+summary(glmm_f)
+summary(glmm_f2)
+summary(glmm_f3)
+summary(glmmtmb_f)
+
+vif(glmm_f2) # all below 1.43
+
+performance::check_model(glmm_f2)
+performance::model_performance(glmm_f2)
+
+### FINAL MODELS
+### Go with glmm_f3_1 and glmm_m3_1 for consistency (for REVISION Aug 2021)
+summary(glmm_m3)
+summary(glmm_f3)
+
+vif(glmm_m3) # below 2.1
+vif(glmm_f3) # below 1.6
+
+glmm_m3_1 <- glmer(path_n ~ scr + nf9 + mh + mb + fb + gs:scr + (1|AtTerr) + (1|YearBorn), data = flm, family="binomial")
+summary(glmm_m3_1) 
+
+glmm_f3_1 <- glmer(path_n ~ scr + nf9 + fh + mb + fb + gs:scr + (1|AtTerr) + (1|YearBorn), data = flf, family="binomial")
+summary(glmm_f3_1)
+
+vif(glmm_m3_1) # below 1.28
+vif(glmm_f3_1) # below 1.4
+
+performance::check_model(glmm_f3_1)
+performance::model_performance(glmm_f3_1)
+
+
+# sanity check
+summarySE(data=flf, measurevar="scr", groupvars = "path_n", na.rm = T)
+
+
+glmm2m <- glmer(path_n ~ scr + nf9 + mh + mh:scr + mb + fb + (1|AtTerr) + (1|YearBorn), data = flm, family="binomial")
+summary(glmm2m) 
+
+glmm2f <- glmer(path_n ~ scr + nf9 + fh + fh:scr + mb + fb + (1|AtTerr) + (1|YearBorn), data = flf, family="binomial")
+summary(glmm2f)
+```
+
+
+### Plot GLMMs 
+Use `glmm_f3` and `glmm_m3` with `flf` and `flm` 
+
+1. Males 
+Only `mh` is significant, some effect of `scr` 
+
+```{r Plot GLMMs}
+library(scales)
+
+# Males 
+flm0 <- flm[,c("path_n", "NatalScrub", "Natalf9", "Mhelper", "mb", "fb", "grpsze", "LveTerrYr")]
+flm0 <- na.omit(flm0)
+flm0$scr <- scale(flm0$NatalScrub)
+flm0$nf9 <- scale(flm0$Natalf9)
+flm0$mh <- scale(flm0$Mhelper)
+flm0$gs <- scale(flm0$grpsze)
+
+mod1 <- glmer(path_n ~ scr + nf9 + mh + mb + fb + gs:scr + (1|LveTerrYr), data = flm0, family="binomial")
+summary(mod1)
+
+# Females 
+flf0 <- flf[,c("path_n", "NatalScrub", "Natalf9", "Fhelper", "mb", "fb", "grpsze", "LveTerrYr")]
+flf0 <- na.omit(flf0)
+flf0$scr <- scale(flf0$NatalScrub)
+flf0$nf9 <- scale(flf0$Natalf9)
+flf0$fh <- scale(flf0$Fhelper)
+flf0$gs <- scale(flf0$grpsze)
+mod2 <- glmer(path_n ~ scr + nf9 + fh + mb + fb + gs:scr + (1|LveTerrYr), data = flf0, family="binomial")
+summary(mod2)
+```
+
+Different method 
+
+```{r plot GLMM2}
+library(ggeffects)
+library(sjmisc)
+library(lme4)
+
+flm2 <- std(flm1, mh)
+
+# take 1
+m1 <- ggpredict(mod1, terms = "mh")
+ggplot(m1, aes(x, predicted)) +
+  geom_line() 
+
+ggpredict(mod1, terms = "mh") %>% plot()
+
+plot(m1) +
+  labs(x = "Number of male helpers (scaled)",
+       y = "Probability of becoming subordinate disperser",
+       title = "") +
+  mytheme
+
+# take 2
+fit = glm(path_n ~ as.vector(mh), data = flm0, family = binomial)
+newdat <- data.frame(mh = seq(min(flm0$mh), max(flm0$mh), len=100))
+newdat$path_n = predict(fit, newdata = newdat, type = "response")
+plot(path_n ~ mh, data = flm0, col="red4")
+lines(path_n ~ mh, newdat, col="green4", lwd=2)
+
+# take 2 - but using untransformed values
+fit = glm(path_n ~ as.vector(Mhelper), data = flm0, family = binomial)
+newdat <- data.frame(Mhelper = seq(min(flm0$Mhelper), max(flm0$Mhelper), len=100))
+newdat$path_n = predict(fit, newdata = newdat, type = "response")
+plot(path_n ~ Mhelper, data = flm0, col="red4")
+lines(path_n ~ Mhelper, newdat, col="green4", lwd=2)
+
+# take 3
+library(jtools)
+ep <- effect_plot(mod1, pred = mh, interval = TRUE, plot.points = F,
+            x.label = "Number of male helpers (scaled)",
+            y.label = "Probability of becoming a subordinate disperser")
+ep + mytheme
+
+# take 4
+plot_summs(mod1, scale = TRUE, plot.distributions = TRUE)
+
+# VIF - but lots of error
+summ(mod1, vifs = TRUE)
+```
+
+
+Plots for slides
+```{r plot GLMM for slides}
+# Males
+ep <- effect_plot(mod1, pred = mh, interval = TRUE, plot.points = F,
+            x.label = "Number of male helpers (scaled)",
+            y.label = "Probability of becoming a subordinate disperser")
+ep + mytheme
+ggsave("glmm_m_mh.png", plot = ggplot2::last_plot(), width=8, height=8, units="in", dpi=300)
+
+ep2 <- effect_plot(mod1, pred = scr, interval = TRUE, plot.points = F,
+            x.label = "Scrub availability (scaled)",
+            y.label = "Probability of becoming a subordinate disperser")
+ep2 + mytheme
+ggsave("glmm_m_scr.png", plot = ggplot2::last_plot(), width=8, height=8, units="in", dpi=300)
+
+# Females
+ep3 <- effect_plot(mod2, pred = mb, interval = TRUE, plot.points = F,
+            x.label = "Presence of father",
+            y.label = "Probability of becoming a subordinate disperser")
+ep3 + mytheme
+ggsave("glmm_f_mb.png", plot = ggplot2::last_plot(), width=8, height=8, units="in", dpi=300)
+
+ep4 <- effect_plot(mod2, pred = scr, interval = TRUE, plot.points = F,
+            x.label = "Scrub availability (scaled)",
+            y.label = "Probability of becoming a subordinate disperser")
+ep4 + mytheme
+ggsave("glmm_f_scr.png", plot = ggplot2::last_plot(), width=8, height=8, units="in", dpi=300)
+
+
+```
+
+
+
+
+< br >
+
+# Compare before and after
+From `dat3`, filter out birds that move from natal to subordinate (Type: Natal -> Transient) 
+- may leave out a few birds that we know are subordinate dispersers but lack any info on transient territory
+
+```{r before after - tests}
+ty <- read_excel("TerrYr2.xlsx")
+
+
+
+subs <- dat3[which(dat3$path == "subordinate"),] # n = 793
+
+# get first row only so move the next terr info (get TERRYR and Type)
+subs$nextterr <- NA
+subs$nextterr[subs$recNum == 1] <- subs$ArrTerrYr[subs$recNum == 2] #move it to first row
+subs$nexttype <- NA
+subs$nexttype[subs$recNum == 1] <- subs$Type[subs$recNum == 2]
+
+# left join, filter those that go to subordinate, and select first row
+subs2 <- subs %>% 
+  left_join(ty, c("LveTerrYr" = "TerrYr")) %>% 
+  left_join(ty, c("nextterr" = "TerrYr"), suffix = c("_lve", "_next")) %>% 
+  filter(nexttype == "Transient") %>% 
+  filter(recNum == 1) %>% 
+  as.data.frame()
+
+
+# summary stats
+# scrub
+summarySE(subs2, measurevar="scrub_lve", groupvars = "Sex", na.rm=T)
+summarySE(subs2, measurevar="scrub_next", groupvars = "Sex", na.rm=T)
+
+# area
+summarySE(subs2, measurevar="area_lve", groupvars = "Sex", na.rm=T)
+summarySE(subs2, measurevar="area_next", groupvars = "Sex", na.rm=T)
+
+# Time since fire
+summarySE(subs2, measurevar="fire9_lve", groupvars = "Sex", na.rm=T)
+summarySE(subs2, measurevar="fire9_next", groupvars = "Sex", na.rm=T)
+
+# helper - all
+summarySE(subs2, measurevar="HelpNum_lve", groupvars = "Sex", na.rm=T)
+#  Sex   N HelpNum_lve       sd        se        ci
+#1   F 107    1.476636 1.305618 0.1262188 0.2502411
+#2   M 100    1.900000 1.487320 0.1487320 0.2951166
+summarySE(tras2, measurevar="HelpNum_next", groupvars = "Sex", na.rm=T)
+#  Sex  N HelpNum_next       sd        se        ci
+#1   F 88    1.1818182 1.282468 0.1367115 0.2717289
+#2   M 97    0.8762887 1.209836 0.1228402 0.2438359
+
+# helper - sex-specific
+summarySE(subs2, measurevar="Fhelper_lve", groupvars = "Sex", na.rm=T)
+summarySE(subs2, measurevar="Fhelper_next", groupvars = "Sex", na.rm=T)
+summarySE(subs2, measurevar="Mhelper_lve", groupvars = "Sex", na.rm=T)
+summarySE(subs2, measurevar="Mhelper_next", groupvars = "Sex", na.rm=T)
+
+# divide by sex
+tm <- subs2[which(subs2$Sex == "M"),] # n = 131
+tf <- subs2[which(subs2$Sex == "F"),] # n = 132
+
+### Statistical comparison
+t.test(tm$scrub_lve, tm$scrub_next, paired=T) #t = 1.2044, df = 74, p-value = 0.2323
+t.test(tf$scrub_lve, tf$scrub_next, paired=T) #t = 1.0994, df = 74, p-value = 0.2752
+
+# Time since fire
+t.test(tm$fire9_lve, tm$fire9_next, paired=T) #t = 0.68921, df = 74, p-value = 0.4928
+t.test(tf$fire9_lve, tf$fire9_next, paired=T) #t = 0.38229, df = 74, p-value = 0.7033
+
+# helper - all
+t.test(tm$HelpNum_lve, tm$HelpNum_next, paired=T) #t = 6.0026, df = 81, p-value = 5.231e-08
+t.test(tf$HelpNum_lve, tf$HelpNum_next, paired=T) #t = 1.5951, df = 80, p-value = 0.1146
+
+# helper - sex-specific
+t.test(tm$Mhelper_lve, tm$Mhelper_next, paired=T) #t = 6.1741, df = 81, p-value = 2.509e-08
+t.test(tf$Fhelper_lve, tf$Fhelper_next, paired=T) #t = 1.9425, df = 80, p-value = 0.0556
+
+
+### Statistical comparison - Wilcoxon (8/18/2021 revision)
+wilcox.test(tm$scrub_lve, tm$scrub_next, paired=T) #V = 1652, p-value = 0.155
+wilcox.test(tf$scrub_lve, tf$scrub_next, paired=T) #V = 1473.5, p-value = 0.5007
+
+# Time since fire
+wilcox.test(tm$fire9_lve, tm$fire9_next, paired=T) #V = 1343, p-value = 0.4196
+wilcox.test(tf$fire9_lve, tf$fire9_next, paired=T) #V = 1285.5, p-value = 0.8036
+
+# helper - sex-specific
+wilcox.test(tm$Mhelper_lve, tm$Mhelper_next, paired=T) #V = 1530, p-value = 5.452e-07
+wilcox.test(tf$Fhelper_lve, tf$Fhelper_next, paired=T) #V = 924.5, p-value = 0.02634
+
+wilcox.test(tm$HelpNum_lve, tm$HelpNum_next, paired=T) #V = 1886, p-value = 4.673e-07
+wilcox.test(tf$HelpNum_lve, tf$HelpNum_next, paired=T) #V = 1159, p-value = 0.06914
+
+
+##################
+# Summary values by paired t-test
+
+# Males
+tm_scr <- tm %>% select(scrub_lve, scrub_next)
+tm_scr <- na.omit(tm_scr)
+
+summarySE(tm_scr, measurevar = "scrub_lve")
+summarySE(tm_scr, measurevar = "scrub_next")
+
+tm_f9 <- tm %>% select(fire9_lve, fire9_next)
+tm_f9 <- na.omit(tm_f9)
+
+summarySE(tm_f9, measurevar = "fire9_lve")
+summarySE(tm_f9, measurevar = "fire9_next")
+
+tm_mh <- tm %>% select(Mhelper_lve, Mhelper_next)
+tm_mh <- na.omit(tm_mh)
+
+summarySE(tm_mh, measurevar = "Mhelper_lve")
+summarySE(tm_mh, measurevar = "Mhelper_next")
+
+tm_hn <- tm %>% select(HelpNum_lve, HelpNum_next)
+tm_hn <- na.omit(tm_hn)
+
+summarySE(tm_hn, measurevar = "HelpNum_lve")
+summarySE(tm_hn, measurevar = "HelpNum_next")
+
+
+# Females
+tf_scr <- tf %>% select(scrub_lve, scrub_next)
+tf_scr <- na.omit(tf_scr)
+
+summarySE(tf_scr, measurevar = "scrub_lve")
+summarySE(tf_scr, measurevar = "scrub_next")
+
+tf_f9 <- tf %>% select(fire9_lve, fire9_next)
+tf_f9 <- na.omit(tf_f9)
+
+summarySE(tf_f9, measurevar = "fire9_lve")
+summarySE(tf_f9, measurevar = "fire9_next")
+
+tf_fh <- tf %>% select(Fhelper_lve, Fhelper_next)
+tf_fh <- na.omit(tf_fh)
+
+summarySE(tf_fh, measurevar = "Fhelper_lve")
+summarySE(tf_fh, measurevar = "Fhelper_next")
+
+tf_hn <- tf %>% select(HelpNum_lve, HelpNum_next)
+tf_hn <- na.omit(tf_hn)
+
+summarySE(tf_hn, measurevar = "HelpNum_lve")
+summarySE(tf_hn, measurevar = "HelpNum_next")
+
+```
+
+Plot this
+```{r before-after plots}
+subs3 <- subs2 %>% 
+  select(Sex, scrub_lve, area_lve, fire9_lve, Fhelper_lve, Mhelper_lve, HelpNum_lve, scrub_next, area_next, fire9_next, Fhelper_next, Mhelper_next, HelpNum_next)
+
+subs4 <- 
+  pivot_longer(subs3, !Sex, names_to = "terratt", values_to = "values")
+
+# what does this look like?
+# ggplot(subs4, aes(x=terratt, y = values))+
+#  geom_boxplot()
+
+# Scrub
+compscrub <- subs4 %>% 
+  filter(terratt == "scrub_lve" | terratt == "scrub_next")
+
+cs <- ggplot(compscrub, aes(x = Sex, y = values, fill = terratt)) +
+  stat_boxplot(aes(x = Sex, y=values, fill=terratt), geom="errorbar", position = position_dodge(width=.75), width=.5) +
+  geom_boxplot(aes(fill=terratt), outlier.size=1.5, position=position_dodge(width=.75), fatten=4) +
+  theme_classic()+ 
+  stat_compare_means(method = "t.test", label="p.signif", size=10, symnum.args=m) +
+  mytheme +
+  labs(fill="Territory", y = "Area of scrub habitat \n (Cell count)") +
+  scale_fill_manual(values=pal20, labels=c("Natal", "Non-natal"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+cs
+
+# fire
+compfire <- subs4 %>% 
+  filter(terratt == "fire9_lve" | terratt == "fire9_next")
+
+cf <- ggplot(compfire, aes(x = Sex, y = values, fill = terratt)) +
+  stat_boxplot(aes(x = Sex, y=values, fill=terratt), geom="errorbar", position = position_dodge(width=.75), width=.5) +
+  geom_boxplot(aes(fill=terratt), outlier.size=1.5, position=position_dodge(width=.75), fatten=4) +
+  theme_classic()+ 
+  stat_compare_means(method = "t.test", label="p.signif", size=10, symnum.args=m) +
+  mytheme +
+  labs(fill="Territory", y = "Area of recently burned scrub \n (Cell count)") +
+  scale_fill_manual(values=pal20, labels=c("Natal", "Non-natal"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+# same-sex
+comphelp <- subs4 %>% 
+  filter(terratt == "Fhelper_lve" | terratt == "Mhelper_lve" | terratt == "Fhelper_next" | terratt == "Mhelper_next") %>% 
+  mutate(terratt2 = ifelse(Sex == "F" & terratt == "Fhelper_lve", "samesex_lve", NA),
+         terratt2 = ifelse(Sex == "F" & terratt == "Fhelper_next", "samesex_next", terratt2),
+         terratt2 = ifelse(Sex == "M" & terratt == "Mhelper_lve", "samesex_lve", terratt2),
+         terratt2 = ifelse(Sex == "M" & terratt == "Mhelper_next", "samesex_next", terratt2)) %>% 
+  as.data.frame() # n = 1052
+comphelp2 <- na.omit(comphelp)
+
+
+ch <- ggplot(comphelp2, aes(x = Sex, y = values, fill = terratt2)) +
+  stat_boxplot(aes(x = Sex, y=values, fill=terratt2), geom="errorbar", position = position_dodge(width=.75), width=.5) +
+  geom_boxplot(aes(fill=terratt2), outlier.size=1.5, position=position_dodge(width=.75), fatten=4) +
+  theme_classic()+ 
+  stat_compare_means(method = "t.test", label="p.signif", size=10, symnum.args=m) +
+  mytheme +
+  labs(fill="Territory", y = "Number of same-sex helpers") +
+  scale_fill_manual(values=pal20, labels=c("Natal", "Non-natal"))+
+  scale_x_discrete(name="Sex", limits=c("M","F"), labels=c("Male","Female"))
+
+
+# Plot all together
+library(cowplot)
+
+prow <- plot_grid(
+  cs + theme(legend.position="none"),
+  cf + theme(legend.position="none"),
+  ch + theme(legend.position="none"),
+  align = 'vh',
+  labels = c("A", "B", "C"),
+  hjust = -1,
+  nrow = 1, label_size = 22
+)
+
+leg <- get_legend(cs + theme(legend.box.margin = margin(0,0,0,12)))
+
+plot_grid(prow, leg, rel_widths = c(3, .4))
+
+ggsave("beforeafter.tiff", plot=last_plot(), width=600, height=200, units="mm", dpi=500, scale=T)
+```
+
+
+< br >
+
+## Survival probability
+Data$Bonferroni =
+      p.adjust(Data$Raw.p,
+               method = "bonferroni")
+```{r yearly survival rate - DISCARDED}
+probs <- read_excel("../../survival.xlsx")
+
+probs <- probs[which(probs$year != "year0to1"),]
+
+probs$year_1 <- as.numeric(probs$year_1)
+probs$year_2 <- as.numeric(probs$year_2)
+
+
+######
+# Are the proportion that survive same between the two dispersal paths?
+# Use prop.test
+######
+# Bonferroni correction
+# p.adjust()
+
+# Split by age
+## Males
+a12sm <- probs[which(probs$sex == "M" & probs$year == "year1to2" & probs$type == "survival"),]
+prop.test(a12sm$year_2, a12sm$year_1) #X-squared = 2.0107, df = 1, p-value = 0.1562
+
+a23sm <- probs[which(probs$sex == "M" & probs$year == "year2to3" & probs$type == "survival"),]
+prop.test(a23sm$year_2, a23sm$year_1) #X-squared = 0.0010595, df = 1, p-value = 0.974
+
+a34sm <- probs[which(probs$sex == "M" & probs$year == "year3to4" & probs$type == "survival"),]
+prop.test(a34sm$year_2, a34sm$year_1) #X-squared = 0.33807, df = 1, p-value = 0.5609
+
+a45sm <- probs[which(probs$sex == "M" & probs$year == "year4to5" & probs$type == "survival"),]
+prop.test(a45sm$year_2, a45sm$year_1) #X-squared = 0.86065, df = 1, p-value = 0.3536
+
+a56sm <- probs[which(probs$sex == "M" & probs$year == "year5to6" & probs$type == "survival"),]
+prop.test(a56sm$year_2, a56sm$year_1) #X-squared = 0, df = 1, p-value = 1
+
+
+prop.test(x=c(389, 85), n=c(554, 111)) #X-squared = 1.5296, df = 1, p-value = 0.2162
+
+## Females
+a12sf <- probs[which(probs$sex == "F" & probs$year == "year1to2" & probs$type == "survival"),]
+prop.test(a12sf$year_2, a12sf$year_1) #X-squared = 0.7733, df = 1, p-value = 0.3792
+
+a23sf <- probs[which(probs$sex == "F" & probs$year == "year2to3" & probs$type == "survival"),]
+prop.test(a23sf$year_2, a23sf$year_1) #X-squared = 4.2746e-31, df = 1, p-value = 1
+
+a34sf <- probs[which(probs$sex == "F" & probs$year == "year3to4" & probs$type == "survival"),]
+prop.test(a34sf$year_2, a34sf$year_1) #X-squared = 0.61568, df = 1, p-value = 0.4327
+
+a45sf <- probs[which(probs$sex == "F" & probs$year == "year4to5" & probs$type == "survival"),]
+prop.test(a45sf$year_2, a45sf$year_1) #X-squared = 0.3125, df = 1, p-value = 0.5762
+
+a56sf <- probs[which(probs$sex == "F" & probs$year == "year5to6" & probs$type == "survival"),]
+prop.test(a56sf$year_2, a56sf$year_1) #X-squared = 0, df = 1, p-value = 1
+
+prop.test(x=c(292, 50), n=c(524, 89)) #X-squared = 2.6663e-30, df = 1, p-value = 1
+```
+
+< br >
+ 
+# Probability of becoming breeder
+
+```{r yearly proportion breeding}
+## Males
+a12bm <- probs[which(probs$sex == "M" & probs$year == "year1to2" & probs$type == "breeding"),]
+prop.test(a12bm$year_2, a12bm$year_1) #X-squared = 0.00036494, df = 1, p-value = 0.9848
+
+a23bm <- probs[which(probs$sex == "M" & probs$year == "year2to3" & probs$type == "breeding"),]
+prop.test(a23bm$year_2, a23bm$year_1) #X-squared = 5.1604e-31, df = 1, p-value = 1
+
+a34bm <- probs[which(probs$sex == "M" & probs$year == "year3to4" & probs$type == "breeding"),]
+prop.test(a34bm$year_2, a34bm$year_1) #X-squared = 0, df = 1, p-value = 1
+
+a45bm <- probs[which(probs$sex == "M" & probs$year == "year4to5" & probs$type == "breeding"),]
+prop.test(a45bm$year_2, a45bm$year_1) #X-squared = 1.3788, df = 1, p-value = 0.2403
+
+a56bm <- probs[which(probs$sex == "M" & probs$year == "year5to6" & probs$type == "breeding"),]
+prop.test(a56bm$year_2, a56bm$year_1) #X-squared = 0, df = 1, p-value = 1
+
+prop.test(x=c(257, 50), n=c(554, 111)) #X-squared = 0.02406, df = 1, p-value = 0.8767
+
+## Females
+a12bf <- probs[which(probs$sex == "F" & probs$year == "year1to2" & probs$type == "breeding"),]
+prop.test(a12bf$year_2, a12bf$year_1) #X-squared = 1.6929, df = 1, p-value = 0.1932
+
+a23bf <- probs[which(probs$sex == "F" & probs$year == "year2to3" & probs$type == "breeding"),]
+prop.test(a23bf$year_2, a23bf$year_1) #X-squared = 0.0023302, df = 1, p-value = 0.9615
+
+a34bf <- probs[which(probs$sex == "F" & probs$year == "year3to4" & probs$type == "breeding"),]
+prop.test(a34bf$year_2, a34bf$year_1) #X-squared = 0.80357, df = 1, p-value = 0.37
+
+a45bf <- probs[which(probs$sex == "F" & probs$year == "year4to5" & probs$type == "breeding"),]
+prop.test(a45bf$year_2, a45bf$year_1) #X-squared = 7.4469e-32, df = 1, p-value = 1
+
+a56bf <- probs[which(probs$sex == "F" & probs$year == "year5to6" & probs$type == "breeding"),]
+prop.test(a56bf$year_2, a56bf$year_1) #X-squared = 0, df = 1, p-value = 1
+
+prop.test(x=c(269, 50), n=c(524, 89)) #X-squared = 0.5343, df = 1, p-value = 0.4648
+```
+
+
+```{r Bonferroni correction}
+malesurv <- c(0.1562, 0.974, 0.5609, 0.3536, 1,1)
+femalesurv <- c(0.3792, 1, 0.4327, 0.5762, 1)
+
+malebre <- c(0.9848, 1,1,0.2403, 1)
+femalebre <- c(0.1932, 0.9615, 0.37, 1, 1)
+
+
+p.adjust(malesurv, method = "bonferroni", n=length(malesurv))
+#0.9372 1.0000 1.0000 1.0000 1.0000 1.0000
+p.adjust(femalesurv, method = "bonferroni", n=length(femalesurv))
+#1 1 1 1 1
+
+p.adjust(malebre, method = "bonferroni", n=length(malebre))
+#1 1 1 1 1
+p.adjust(femalebre, method = "bonferroni", n=length(femalebre))
+#0.966 1.000 1.000 1.000 1.000
+```
+
+< br >
+
+## Survival analysis
+### Became breeder
+
+`adf2` and `adm2` are annual data
+
+*BUT* there is a discrepancy between the tables (3, 4) and the datasets. In the table, some birds were ignored as being subordinate dispersers 
+
+```{r survival - became breeder}
+library(survival)
+library(survminer)
+
+# Get list of jays - natal - hatch year
+d <- dat %>% 
+  select(USFWBand, NatalNest, YearBorn) %>% 
+  mutate(id = USFWBand,
+         natal = str_sub(NatalNest, 1, 4),
+         hy = YearBorn) %>% 
+  select(id, natal, hy)
+
+#### Males
+probs.br.m <- adm2[,c("id", "path", "social", "home", "prior", "atTerr", "turnedbreeder", "recn", "lastobs", "year")]
+probs.br.m$path <- as.factor(probs.br.m$path)
+
+brd.m <- probs.br.m %>% 
+  left_join(d, by = "id") %>% 
+  distinct
+
+#### Females
+probs.br.f <- adf2[,c("id", "path", "social", "home", "prior",  "atTerr", "turnedbreeder", "recn", "lastobs", "year")]
+probs.br.f$path <- as.factor(probs.br.f$path)
+
+brd.f <- probs.br.f %>% 
+  left_join(d, by = "id") %>% 
+  distinct
+```
+
+
+
+
+### Survival
+
+This one needs to be re-thought because lastobs = 1 for birds that become breeders as well. 
+
+For birds that became breeders, lastobs = 0 
+
+Use `probs.br.m` and `probs.br.f` 
+
+```{r}
+# First make those that become breeders, lastobs = 0
+surv.m <- brd.m %>% 
+  mutate(last = ifelse(turnedbreeder == 1, 0, lastobs))
+surv.f <- brd.f %>% 
+  mutate(last = ifelse(turnedbreeder == 1, 0, lastobs))
+```
+
+#### Use logistic regression
+
+Reporting EST, SE, z-value, p-value 
+
+Change to Natal Terr and Natal Year
+
+```{r discrete time log regression models - survival}
+### remove breeder
+survm <- surv.m[which(surv.m$social != "Breeder"),]
+survf <- surv.f[which(surv.f$social != "Breeder"),]
+
+n_distinct(survm$id) # 709
+n_distinct(survf$id) # 692
+
+distime_suv_m <- glmer(last ~ recn + home + (1|natal) + (1|hy), data = survm, family="binomial", na.action = "na.fail")
+summary(distime_suv_m) #homehome     0.16711    0.25942   0.644    0.519
+
+distime_suv_f <- glmer(last ~ recn + home + (1|natal) + (1|hy), data = survf, family="binomial", na.action = "na.fail")
+summary(distime_suv_f) #homehome    0.35735    0.23381   1.528 0.126422  
+
+# Plot
+fit.sm <- survfit(Surv(recn, last) ~ home, data = survm)
+srv.m1 <- ggsurvplot(fit.sm, data = survm, pval = F, 
+           position = position_dodge(width=.3), 
+           palette = pal2,
+           font.y = c(22, "bold", "black"),
+           font.x = c(22, "bold", "black"),
+           font.tickslab = c(20, "plain", "black"),
+           size = 2, 
+           conf.int = T,
+           censor = F,
+           legend = c(0.3, 0.3),
+           legend.title = "", 
+           legend.labs = c("Delayed", "Staging"),
+           break.x.by = 1,
+           xlim = c(1,7)) +
+  labs(x="Age in years", y="Apparent survivorship") 
+srv.m1$plot <- srv.m1$plot + 
+  theme(legend.text = element_text(size = 20, color = "black", face = "plain"), 
+        legend.title = element_text(size = 22, color = "black", face = "bold"))
+srv.m1
+
+fit.sf <- survfit(Surv(recn, last) ~ home, data = survf)
+srv.f1 <- ggsurvplot(fit.sf, data = survf, pval = F, 
+           position = position_dodge(width=.3), 
+           palette = pal2,
+           font.y = c(22, "bold", "black"),
+           font.x = c(22, "bold", "black"),
+           font.tickslab = c(20, "plain", "black"),
+           size = 2, 
+           conf.int = T,
+           censor = F,
+           legend = c(0.3, 0.3),
+           legend.title = "", 
+           legend.labs = c("Delayed", "Staging"),
+           break.x.by = 1,
+           xlim = c(1,6)) +
+  labs(x="Age in years", y="Apparent survivorship") 
+srv.f1$plot <- srv.f1$plot + 
+  theme(legend.text = element_text(size = 20, color = "black", face = "plain"), 
+        legend.title = element_text(size = 22, color = "black", face = "bold"))
+srv.f1
+
+pg_srv <- plot_grid(
+  srv.m1$plot,
+  srv.f1$plot + theme(legend.position="none"),
+  align = 'vh',
+  labels = c("A", "B"),
+  hjust = -1,
+  nrow = 1, label_size = 22)
+
+pg_srv
+
+ggsave("prob_surv_both.tiff", plot=last_plot(), width=400, height=200, units="mm", dpi=300, scale=T)
+```
+
+
+
+```{r discrete time log regression model - prob breeding}
+############
+### new variable indicating past residence
+#
+n_distinct(brd.m$id)
+brd.m$past <- ifelse(brd.m$prior == "Transient", "elsewhere", "home")
+distime_brd_m <- glmer(turnedbreeder ~ recn + past + (1|natal) + (1|hy), data = brd.m, family="binomial", na.action = "na.fail")
+summary(distime_brd_m)
+
+# females
+n_distinct(brd.f$id)
+brd.f$past <- ifelse(brd.f$prior == "Transient", "elsewhere", "home")
+distime_brd_f <- glmer(turnedbreeder ~ recn + past + (1|natal) + (1|hy), data = brd.f, family="binomial", na.action = "na.fail")
+summary(distime_brd_f) 
+
+#surv.m <- brd.m %>% 
+#   mutate(last = ifelse(turnedbreeder == 1, 0, lastobs))
+# surv.f <- brd.f %>% 
+#   mutate(last = ifelse(turnedbreeder == 1, 0, lastobs))
+# #### Remove recn = 1
+# sm <- surv.m[which(surv.m$recn >1),]
+# sf <- surv.f[which(surv.f$recn >1),]
+
+###########
+# remove recn = 1
+#log1m0 <- glmer(turnedbreeder ~ recn + past + (1|natal) + (1|hy), data = sm, family="binomial", na.action = "na.fail")
+#summary(log1m0) # pasthome     0.09321    0.21041   0.443    0.658    
+
+#log1f0 <- glmer(turnedbreeder ~ recn + past + (1|natal) + (1|hy), data = sf, family="binomial", na.action = "na.fail")
+#summary(log1f0) # pasthome     -0.8856     0.3197   -2.77   0.0056 ** 
+
+
+fit.sm0 <- survfit(Surv(recn, turnedbreeder) ~ past, data = sm)
+srv.m0 <- ggsurvplot(fit.sm0, data = sm, pval = F, 
+           position = position_dodge(width=.3), 
+           palette = pal2,
+           font.y = c(22, "bold", "black"),
+           font.x = c(22, "bold", "black"),
+           font.tickslab = c(20, "plain", "black"),
+           size = 2, 
+           conf.int = T,
+           censor = F,
+           legend = c(0.2, 0.8),
+           legend.title = "", 
+           fun = "event", 
+           legend.labs = c("Delayed", "Staging"),
+           break.x.by = 1,
+           xlim = c(1,7)) +
+  labs(x="Age in years", y="Probability of having become breeder") 
+srv.m0$plot <- srv.m0$plot + 
+  theme(legend.text = element_text(size = 20, color = "black", face = "plain"), 
+        legend.title = element_text(size = 22, color = "black", face = "bold"))
+srv.m0
+
+fit.sf0 <- survfit(Surv(recn, turnedbreeder) ~ past, data = sf)
+srv.f0 <- ggsurvplot(fit.sf0, data = sf, pval = F, 
+           position = position_dodge(width=.3), 
+           palette = pal2,
+           font.y = c(22, "bold", "black"),
+           font.x = c(22, "bold", "black"),
+           font.tickslab = c(20, "plain", "black"),
+           size = 2, 
+           conf.int = T,
+           fun = "event", 
+           censor = F,
+           legend = c(0.3, 0.3),
+           legend.title = "", 
+           legend.labs = c("Delayed", "Staging"),
+           break.x.by = 1,
+           xlim = c(1,6)) +
+  labs(x="Age in years", y="Probability of having become breeder") 
+srv.f0$plot <- srv.f0$plot + 
+  theme(legend.text = element_text(size = 20, color = "black", face = "plain"), 
+        legend.title = element_text(size = 22, color = "black", face = "bold"))
+srv.f0
+
+pg_srv0 <- plot_grid(
+  srv.m0$plot,
+  srv.f0$plot + theme(legend.position="none"),
+  align = 'vh',
+  labels = c("A", "B"),
+  hjust = -1,
+  nrow = 1, label_size = 22)
+
+pg_srv0
+
+ggsave("prob_breed_both.tiff", plot=last_plot(), width=400, height=200, units="mm", dpi=300, scale=T)
+```
+
+
+```{r Supp - group size and quality}
+summary(lm(ty$HelpNum~ty$scrub))
+summary(lm(ty$scrub~ty$HelpNum))
+ty$groupsize <- ty$HelpNum + 2
+
+ty$gs <- as.factor(ty$groupsize)
+
+sty <- summarySE(ty, measurevar = "scrub", groupvars = "groupsize", na.rm=T)
+sty$gs <- as.factor(sty$groupsize)
+sty1 <- sty[which(sty$gs != "NA"),]
+ty1 <- ty[which(ty$gs != "NA"),]
+
+# with n= on top of bar
+ggplot() +
+  geom_bar(data=sty1, aes(x=gs, y=scrub), stat="identity", color="black") +
+  geom_errorbar(data=sty1, aes(x = gs, ymin=scrub-sd, ymax=scrub+sd), width=.2, position=position_dodge(.9)) +
+  geom_smooth(data=ty1, aes(x = groupsize, y = scrub), method = "lm", se= T, color = "firebrick1", size = 2) +
+  theme_classic()+ 
+  mytheme_fin+
+  labs(x="Group size", y="Area of scrub in territory") +
+  geom_text(data=sty1, aes(x=gs, y=scrub, label= paste0("n = ", N)), nudge_y=2, vjust = -1)
+
+
+
+# just n on bottom of bar
+gs_bar<- ggplot(data=sty1, aes(x=gs, y=scrub)) +
+  geom_col(fill="gray") +
+  geom_errorbar(aes(x=gs, ymin=scrub-se, ymax=scrub+se), width=.2, position=position_dodge(.9)) +
+  theme_classic()+ 
+  theme(axis.text=element_text(size=12, face="bold", color="black"),
+        axis.title=element_text(size=14,face="bold",color="black"))+
+  labs(x="Group size", y="Area of scrub in territory") +
+  geom_text(aes(x=gs, y=0, label= N), nudge_y=2) +
+  geom_smooth(aes(group=1), method = "lm", se= F, color = "firebrick1", size = 2, fullrange=F) 
+gs_bar
+
+
+# just n on bottom of bar + combine 7 and 8
+ty$gs1 <- ty$gs
+ty$gs1 <- as.character(ty$gs1)
+ty$gs1[ty$gs1 == "7"] <- "7+"
+ty$gs1[ty$gs1 == "8"] <- "7+"
+ty$gs1 <- as.factor(ty$gs1)
+
+table(ty$gs)
+table(ty$gs1)
+
+
+sty0 <- summarySE(ty, measurevar = "scrub", groupvars = "gs1", na.rm=T)
+sty0
+sty10 <- sty0[which(sty0$gs1 != "NA"),]
+
+ggplot(data=sty10, aes(x=gs1, y=scrub)) +
+  geom_col(fill="gray") +
+  geom_errorbar(aes(x=gs1, ymin=scrub-se, ymax=scrub+se), width=.2, position=position_dodge(.9)) +
+  theme_classic()+ 
+  theme(axis.text=element_text(size=12, face="bold", color="black"),
+        axis.title=element_text(size=14,face="bold",color="black"))+
+  labs(x="Group size", y="Area of scrub in territory \n (in cell counts)") +
+  geom_text(aes(x=gs1, y=0, label= N), nudge_y=2) +
+  geom_smooth(aes(group=1), method = "lm", se= F, color = "firebrick1", size = 2, fullrange=F) 
+
+ggsave("supp_groupsize2.png", plot=last_plot(), width=200, height=130, units="mm", dpi=600, scale=T)
+
+
+t <- summary(lm(ty$scrub~ty$groupsize)) 
+#             Estimate Std. Error t value Pr(>|t|)  
+#ty$groupsize   253.11      35.15   7.201 8.87e-13 ***
+t$coefficients
+coef(t)[2] # beta values
+coef(t)[6] # t-value
+coef(t)[8] # p-value
+t$adj.r.squared # 0.02867 
+
+
+# make prettier graph
+# try to test if females are more likely to stage from larger group sizes
+flf$path <- as.factor(flf$path)
+summary(glm(flf$path ~ flf$grpsze, family="binomial")) 
+#Coefficients:
+#            Estimate Std. Error z value Pr(>|z|)
+#flf$grpsze  -0.04078    0.10099  -0.404    0.686
+
+
+hist(ty$HelpNum)
+
+```
+
