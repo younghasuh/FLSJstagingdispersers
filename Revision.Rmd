@@ -1,0 +1,24 @@
+---
+title: "StagingDispersers"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Libraries 
+```{r Libraries}
+library(readxl)
+library(lme4)
+library(lubridate)
+library(Rmisc)
+library(car)
+library(survival)
+library(survminer)
+library(tidyverse)
+library(glmmTMB)
+library(TeachingDemos)
+library(ggpubr)
+library(patchwork)
+library(cowplot)
+```
+
