@@ -2,6 +2,9 @@
 
 This repository contains statistical code and data related to the manuscript titled "Staging to join non-kin groups in a classical cooperative breeder, the Florida scrub-jay" submitted to the [Journal of Animal Ecology](https://besjournals.onlinelibrary.wiley.com/journal/13652656). The goal is to increase transparency and reproducibility in research.
 
+![jane v91 5 cover](https://github.com/younghasuh/FLSJstagingdispersers/assets/22403928/3abbeecb-a212-4432-880a-0dd679878dad)
+
+
 Authors: Young Ha Suh<sup>1,2</sup>, Reed Bowman<sup>3</sup>, and John W. Fitzpatrick<sup>1,2</sup>
 
 1. Department of Ecology and Evolutionary Biology, Cornell University, Ithaca, NY 14853.
